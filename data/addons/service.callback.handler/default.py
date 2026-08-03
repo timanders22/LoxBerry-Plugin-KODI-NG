@@ -1,7 +1,8 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 #     Copyright (C) 2015 Tefi
+#     Python-3-Port + MQTT (LoxBerry MQTT Gateway) 2026
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -15,162 +16,156 @@
 #
 #    You should have received a copy of the GNU General Public License
 #    along with this program. If not, see <http://www.gnu.org/licenses/>.
-#
-#    This script is based on script.randomitems & script.wacthlist
-#    Thanks to their original authors
 
-import os
-import sys
-import xbmc
-import xbmcgui
-import xbmcaddon
-import subprocess
 import socket
 
-udp_address = ''
-udp_port = '7000'
-volume_on_start = '50'
+import xbmc
+import xbmcaddon
 
-__addon__        = xbmcaddon.Addon()
+__addon__ = xbmcaddon.Addon()
 __addonversion__ = __addon__.getAddonInfo('version')
-__addonid__      = __addon__.getAddonInfo('id')
-__addonname__    = __addon__.getAddonInfo('name')
+__addonname__ = __addon__.getAddonInfo('name')
+
+settings = {
+    'udp_address': '',
+    'udp_port': '7000',
+    'volume_on_start': '50',
+    'mqtt_enable': 'true',
+    'mqtt_address': '',
+    'mqtt_udpport': '11884',
+    'mqtt_topic': 'kodi',
+}
+
 
 def log(txt):
-  message = '%s: %s' % (__addonname__, txt.encode('ascii', 'ignore'))
-  xbmc.log(msg=message, level=xbmc.LOGDEBUG)
+    xbmc.log(msg='%s: %s' % (__addonname__, txt), level=xbmc.LOGDEBUG)
 
-def send_udp (txt):
-  log(txt)
-  sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
-  sock.sendto(txt, (udp_address, int(udp_port)))
-	
-	
-class Main:
-  def __init__(self):
-    self._init_vars()
-    self._init_property()
-    xbmc.executebuiltin( "XBMC.SetVolume(" + volume_on_start + ")" )
-    self._daemon()
 
-  def _init_vars(self):
-    self.Player = MyPlayer()
-    self.Monitor = MyMonitor(update_settings = self._init_property, player_status = self._player_status)
+def read_settings():
+    for key in settings:
+        val = __addon__.getSetting(key)
+        if val != '':
+            settings[key] = val
+        log('%s = "%s"' % (key, settings[key]))
 
-  def _init_property(self):
-    log('Reading properties')
-    global udp_address
-    global udp_port
-    global volume_on_start
-	
-    udp_address = xbmc.translatePath(__addon__.getSetting("udp_address"))
-    udp_port = xbmc.translatePath(__addon__.getSetting("udp_port"))
-    volume_on_start = xbmc.translatePath(__addon__.getSetting("volume_on_start"))
 
-    log('udp_address = "' + udp_address + '"')
-    log('udp_port = "' + udp_port + '"')
-    log('volume_on_start = "' + volume_on_start + '"')
-	
-  def _player_status(self):
-    return self.Player.playing_status()
+def send_raw_udp(payload, address, port):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.sendto(payload.encode('utf-8'), (address, int(port)))
+        sock.close()
+    except Exception as e:
+        log('UDP send failed (%s:%s): %s' % (address, port, e))
 
-  def _daemon(self):
-    send_udp('kodi_started')
-    while (not xbmc.abortRequested):
-      # Do nothing      
-      xbmc.sleep(10000)
-    log('abort requested')
-    send_udp('kodi_stopped')
+
+def send_event(event, value=None):
+    """Ereignis an Miniserver (UDP, altes Format) und/oder MQTT Gateway senden."""
+    text = event if value is None else '%s=%s' % (event, value)
+    log(text)
+    # 1) Klassisch: UDP direkt an den Miniserver (Virtueller UDP-Eingang)
+    if settings['udp_address']:
+        send_raw_udp(text, settings['udp_address'], settings['udp_port'])
+    # 2) MQTT ueber das LoxBerry MQTT Gateway (UDP-Interface, retained)
+    if settings['mqtt_enable'] == 'true' and settings['mqtt_address']:
+        topic = settings['mqtt_topic'].rstrip('/')
+        if value is None:
+            msg = 'retain %s/event %s' % (topic, event)
+        else:
+            msg = 'retain %s/%s %s' % (topic, event, value)
+        send_raw_udp(msg, settings['mqtt_address'], settings['mqtt_udpport'])
 
 
 class MyMonitor(xbmc.Monitor):
-  def __init__(self, *args, **kwargs):
-    xbmc.Monitor.__init__(self)
-    self.get_player_status = kwargs['player_status']
-    self.update_settings = kwargs['update_settings']
 
-  def onSettingsChanged(self):
-    self.update_settings()
+    def __init__(self, update_settings):
+        xbmc.Monitor.__init__(self)
+        self.update_settings = update_settings
 
-  def onScreensaverActivated(self):
-    log('screensaver starts')
+    def onSettingsChanged(self):
+        self.update_settings()
 
-  def onScreensaverDeactivated(self):
-    log('screensaver stops')
+    def onScreensaverActivated(self):
+        log('screensaver starts')
+        send_event('screensaver', 'on')
 
-  def onDatabaseUpdated(self,db):
-    log('database updated')
+    def onScreensaverDeactivated(self):
+        log('screensaver stops')
+        send_event('screensaver', 'off')
+
 
 class MyPlayer(xbmc.Player):
-  title = ''
-  
-  def __init__(self):
-    xbmc.Player.__init__(self)
-    self.substrings = [ '-trailer', 'http://' ]
+    title = ''
 
-  def playing_status(self):
-    if self.isPlaying():
-      return 'status=playing' + ';' + self.playing_type()
-    else:
-      return 'status=stopped'
+    def __init__(self):
+        xbmc.Player.__init__(self)
+        self.substrings = ['-trailer', 'http://']
 
-  def playing_type(self):
-    type = 'unknown'
-    if (self.isPlayingAudio()):
-      type = "music"  
-    else:
-      if xbmc.getCondVisibility('VideoPlayer.Content(movies)'):
-        filename = ''
-        isMovie = True
+    def playing_type(self):
+        ptype = 'unknown'
+        if self.isPlayingAudio():
+            ptype = 'music'
+        else:
+            if xbmc.getCondVisibility('VideoPlayer.Content(movies)'):
+                filename = ''
+                is_movie = True
+                try:
+                    filename = self.getPlayingFile()
+                except Exception:
+                    pass
+                if filename:
+                    for s in self.substrings:
+                        if s in filename:
+                            is_movie = False
+                            break
+                if is_movie:
+                    ptype = 'movie'
+                    MyPlayer.title = xbmc.getInfoLabel('ListItem.Title')
+            elif xbmc.getCondVisibility('VideoPlayer.Content(episodes)'):
+                if xbmc.getInfoLabel('VideoPlayer.Season') != '' and xbmc.getInfoLabel('VideoPlayer.TVShowTitle') != '':
+                    ptype = 'episode'
+        return ptype
+
+    def onPlayBackStarted(self):
+        ptype = self.playing_type()
+        send_event(ptype + '_started')
+        send_event(ptype + '_title', MyPlayer.title)
+
+    def onAVStarted(self):
+        # Kodi 18+: eigentlicher Wiedergabestart
+        pass
+
+    def onPlayBackEnded(self):
+        self.onPlayBackStopped()
+
+    def onPlayBackStopped(self):
+        send_event(self.playing_type() + '_stopped')
+
+    def onPlayBackPaused(self):
+        send_event(self.playing_type() + '_paused')
+
+    def onPlayBackResumed(self):
+        send_event(self.playing_type() + '_resumed')
+
+
+class Main:
+
+    def __init__(self):
+        read_settings()
+        self.player = MyPlayer()
+        self.monitor = MyMonitor(update_settings=read_settings)
         try:
-          filename = self.getPlayingFile()
-        except:
-          pass
-        if filename != '':
-          for string in self.substrings:
-            if string in filename:
-              isMovie = False
-              break
-        if isMovie:
-          type = "movie"
-          MyPlayer.title = unicode( xbmc.getInfoLabel( "ListItem.Title" ), "utf-8" )
-      elif xbmc.getCondVisibility('VideoPlayer.Content(episodes)'):
-        # Check for tv show title and season to make sure it's really an episode
-        if xbmc.getInfoLabel('VideoPlayer.Season') != "" and xbmc.getInfoLabel('VideoPlayer.TVShowTitle') != "":
-           type = "episode"
-    return type
+            xbmc.executebuiltin('SetVolume(%s)' % int(float(settings['volume_on_start'])))
+        except Exception as e:
+            log('SetVolume failed: %s' % e)
+        send_event('kodi_started')
+        while not self.monitor.abortRequested():
+            if self.monitor.waitForAbort(10):
+                break
+        log('abort requested')
+        send_event('kodi_stopped')
 
-  def playing_title(self):
-    return MyPlayer.title
-    
-  def playing_filename(self):
-      filename = ''
-      try:
-          filename = self.getPlayingFile()
-      except:
-          pass
-      return 'filename=' + filename
-      
-  def onPlayBackStarted(self):
-    send_udp(self.playing_type()+'_started')
-    send_udp(self.playing_type()+'_title='+self.playing_title())
-    
-  def onPlayBackEnded(self):
-    self.onPlayBackStopped()
 
-  def onPlayBackStopped(self):
-    send_udp(self.playing_type()+'_stopped')
-
-  def onPlayBackPaused(self):
-    send_udp(self.playing_type()+'_paused')
-
-  def onPlayBackResumed(self):
-    send_udp(self.playing_type()+'_resumed')
-
-if (__name__ == "__main__"):
+if __name__ == '__main__':
     log('script version %s started' % __addonversion__)
     Main()
-    del MyPlayer
-    del MyMonitor
-    del Main
     log('script version %s stopped' % __addonversion__)

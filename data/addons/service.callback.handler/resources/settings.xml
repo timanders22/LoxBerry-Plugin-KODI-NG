@@ -1,8 +1,14 @@
-<?xml version="1.1" encoding="UTF-8" standalone="yes"?>
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <settings>
-    <category label="32000"> 
+    <category label="32000">
       <setting label="32001" type="ipaddress" id="udp_address"/>
       <setting label="32002" type="number" id="udp_port" default="7000"/>
-	  <setting label="32003" type="slider" id="volume_on_start" default="90" range="5,5,100" option="percent" />
+      <setting label="32003" type="slider" id="volume_on_start" default="90" range="5,5,100" option="percent" />
+    </category>
+    <category label="32010">
+      <setting label="32011" type="bool" id="mqtt_enable" default="true"/>
+      <setting label="32012" type="ipaddress" id="mqtt_address"/>
+      <setting label="32013" type="number" id="mqtt_udpport" default="11884"/>
+      <setting label="32014" type="text" id="mqtt_topic" default="kodi"/>
     </category>
 </settings>

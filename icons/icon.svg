@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Kodi für LoxBerry</title>
+  <circle cx="256" cy="256" r="256" fill="#6dac20"/>
+  <g fill="#ffffff">
+    <rect x="110" y="130" width="292" height="205" rx="28" ry="28"/>
+    <rect x="233" y="335" width="46" height="41"/>
+    <rect x="154" y="371" width="204" height="26" rx="13" ry="13"/>
+  </g>
+  <path d="M 209 138 L 209 327 L 348 232 Z" fill="#6dac20"/>
+</svg>

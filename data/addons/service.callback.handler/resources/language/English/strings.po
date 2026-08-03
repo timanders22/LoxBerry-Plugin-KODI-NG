@@ -34,3 +34,23 @@ msgstr ""
 msgctxt "#32003"
 msgid "Volume on XBMC start:"
 msgstr ""
+
+msgctxt "#32010"
+msgid "MQTT (LoxBerry MQTT Gateway)"
+msgstr ""
+
+msgctxt "#32011"
+msgid "Send events via MQTT"
+msgstr ""
+
+msgctxt "#32012"
+msgid "LoxBerry IP address:"
+msgstr ""
+
+msgctxt "#32013"
+msgid "MQTT Gateway UDP port:"
+msgstr ""
+
+msgctxt "#32014"
+msgid "MQTT base topic:"
+msgstr ""

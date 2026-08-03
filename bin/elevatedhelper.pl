@@ -7,15 +7,18 @@ use strict;
 
 our $cgi = CGI->new;
 $cgi->import_names('R');
-my  $version = "0.1.1";
+my  $version = "1.0.0";
+
+# LoxBerry 4 / Raspberry Pi OS bookworm: config.txt liegt unter /boot/firmware/
+my $configtxt = -f "/boot/firmware/config.txt" ? "/boot/firmware/config.txt" : "/boot/config.txt";
 
 if ($R::action eq "change") {
 	my $success;
 	if ($R::key eq "licvc1") {
-		$success = replace_str_in_file("/boot/config.txt", "decode_WVC1=", "decode_WVC1=$R::value");
+		$success = replace_str_in_file($configtxt, "decode_WVC1=", "decode_WVC1=$R::value");
 	}
 	if ($R::key eq "licmpeg2") {
-		$success = replace_str_in_file("/boot/config.txt", "decode_MPG2=", "decode_MPG2=$R::value");
+		$success = replace_str_in_file($configtxt, "decode_MPG2=", "decode_MPG2=$R::value");
 	}
 
 	if ($R::key eq "kodiautostart") {
@@ -41,17 +44,22 @@ if ($R::action eq "change") {
 }
 
 if ($R::action eq "query") {
-	my $mpeg2lic = find_str_in_file("/boot/config.txt", "decode_MPG2=");
+	my $mpeg2lic = find_str_in_file($configtxt, "decode_MPG2=");
 	# print STDERR "TEST $mpeg2lic\n";
-	my $vc1lic = find_str_in_file("/boot/config.txt", "decode_WVC1=");
-	
+	my $vc1lic = find_str_in_file($configtxt, "decode_WVC1=");
+
 	my $piserial = trim(find_str_in_file("/proc/cpuinfo", "Serial\t\t:"));
 	$piserial = "Not found" if (! $piserial);
-	
-	my ($dummympeg2, $mpeg2status) = split(/=/, qx { vcgencmd codec_enabled MPG2 });
-	my ($dummyvc1, $vc1status) = split(/=/, qx { vcgencmd codec_enabled WVC1 });
+
+	# Pi 4/5: Codec-Lizenzen gibt es nicht mehr, vcgencmd kann fehlen -> tolerant sein
+	my ($dummympeg2, $mpeg2status) = split(/=/, qx { vcgencmd codec_enabled MPG2 2>/dev/null } // "");
+	my ($dummyvc1, $vc1status) = split(/=/, qx { vcgencmd codec_enabled WVC1 2>/dev/null } // "");
+	$mpeg2status = "n/a (ab Pi 4 nicht mehr noetig)" if (!defined $mpeg2status || $mpeg2status eq "");
+	$vc1status = "n/a (ab Pi 4 nicht mehr noetig)" if (!defined $vc1status || $vc1status eq "");
 	chomp ($mpeg2status);
 	chomp ($vc1status);
+	$mpeg2lic = "" if (!defined $mpeg2lic);
+	$vc1lic = "" if (!defined $vc1lic);
 	
 	my $kodi_autostart = qx { systemctl is-enabled kodi };
 	my $rc = $?;

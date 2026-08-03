@@ -1,13 +1,13 @@
-<?xml version="1.1" encoding="UTF-8" standalone="yes"?>
-<addon id="service.callback.handler" name="LoxBerry Kodi Callback Handler" version="2.0" provider-name="christiantf">
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="service.callback.handler" name="LoxBerry Kodi Callback Handler" version="3.0.0" provider-name="christiantf">
   <requires>
-    <import addon="xbmc.python" version="2.1.0"/>
+    <import addon="xbmc.python" version="3.0.0"/>
   </requires>
-  <extension point="xbmc.service" library="default.py" start="startup">
+  <extension point="xbmc.service" library="default.py">
   </extension>
   <extension point="xbmc.addon.metadata">
     <platform>all</platform>
-    <summary lang="en">Callbacks for Kodi. Send status to a UDP destination at certain functions such as player start, stop, etc.</summary>
-    <description lang="en">send the following status to the UDP Address: xbmc_started, xbmc_stopped, music_started, music_paused, music_resumed, music_stopped, movie_started, movie_paused, movie_resumed, movie_stopped, movie_title=%s</description>
+    <summary lang="en">Callbacks for Kodi. Sends status to a UDP destination and/or the LoxBerry MQTT Gateway on player events (start, stop, pause, ...).</summary>
+    <description lang="en">Sends the following events via UDP and/or MQTT (LoxBerry MQTT Gateway): kodi_started, kodi_stopped, music_started, music_paused, music_resumed, music_stopped, movie_started, movie_paused, movie_resumed, movie_stopped, movie_title=%s, screensaver=on/off. Python 3 (Kodi 19 Matrix or later).</description>
   </extension>
 </addon>
