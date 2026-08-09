@@ -1,1 +1,16 @@
+# Ein Paket je Zeile, exakter Paketname wie fuer apt-get.
+#
+# kodi bringt seine Abhaengigkeiten (u.a. Python 3) selbst mit.
+#
+# BEWUSST NICHT eingetragen: python3-paho-mqtt.
+#
+# Das Callback-Addon meldet zwar per MQTT, benutzt dafuer aber keine
+# MQTT-Bibliothek, sondern ein einfaches UDP-Paket an das MQTT-Gateway von
+# LoxBerry (siehe send_raw_udp in data/addons/service.callback.handler/
+# default.py). Es braucht also nur das Modul socket aus der
+# Standardbibliothek.
+#
+# Das Paket zu installieren wuerde ausserdem nichts nuetzen: Addons laufen
+# im eingebauten Python von Kodi, und das sieht die Systempakete von
+# Debian nicht zwangslaeufig.
 kodi

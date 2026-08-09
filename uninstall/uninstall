@@ -1,0 +1,48 @@
+#!/bin/bash
+# Kodi - Deinstallation (laeuft als ROOT)
+#
+# Bis 1.0.0 gab es dieses Skript gar nicht. Nach dem Entfernen des Plugins
+# blieben deshalb zurueck: der Systemdienst, die udev-Regeln, die
+# sudoers-Regel und der Benutzer kodi samt Heimatverzeichnis. Beim naechsten
+# Systemstart lief Kodi weiter, obwohl das Plugin weg war.
+
+echo "<INFO> Beende den Kodi-Dienst"
+systemctl stop kodi_ng 2>/dev/null || true
+systemctl disable kodi_ng 2>/dev/null || true
+
+# ENTFERNT WIRD NUR, WAS DIESES PLUGIN ANGELEGT HAT.
+#
+# Seit 1.1.0 heissen Dienst und Regeln kodi_ng.*. Ein etwaiges kodi.service
+# oder /etc/init.d/kodi stammt aus der Originalfassung oder aus 1.0.0 dieser
+# Linie und wird hier NICHT angefasst - es koennte zu einer fremden, noch
+# laufenden Installation gehoeren. Der Hinweis dazu steht unten.
+echo "<INFO> Entferne die systemd-Unit"
+rm -f /etc/systemd/system/kodi_ng.service
+systemctl daemon-reload 2>/dev/null || true
+
+echo "<INFO> Entferne die udev-Regeln"
+rm -f /etc/udev/rules.d/99-kodi_ng.rules /etc/udev/rules.d/10-kodi_ng-permissions.rules
+udevadm control --reload-rules 2>/dev/null || true
+
+# Die Sicherung der config.txt zuruecklegen, falls das Plugin sie angelegt
+# hat. Sonst bleiben gpu_mem und die Codec-Lizenzen fuer immer stehen.
+for k in /boot/firmware/config.txt /boot/config.txt; do
+    if [ -f "${k}.kodiplugin" ]; then
+        echo "<INFO> Stelle ${k} aus der Sicherung wieder her"
+        cp -f "${k}.kodiplugin" "$k" && rm -f "${k}.kodiplugin"
+        echo "<INFO> Die Aenderung wirkt erst nach einem Neustart."
+    fi
+done
+
+# Der Benutzer kodi bleibt BEWUSST stehen, ebenso /home/kodi.
+#
+# Darin liegen die Medienbibliothek, die Wiedergabestaende und die
+# Zugangsdaten der Quellen. Wer das Plugin entfernt, will meistens die
+# LoxBerry-Anbindung los - nicht seine ueber Jahre gewachsene
+# Kodi-Datenbank. Das Entfernen von Hand steht hier:
+echo "<INFO> Der Benutzer kodi und /home/kodi bleiben erhalten (Mediathek,"
+echo "<INFO> Wiedergabestaende, Zugangsdaten). Wer auch das entfernen will:"
+echo "<INFO>   sudo userdel -r kodi"
+echo "<INFO> Kodi selbst bleibt installiert: sudo apt purge kodi"
+
+exit 0

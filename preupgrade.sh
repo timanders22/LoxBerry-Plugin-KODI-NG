@@ -1,34 +1,42 @@
 #!/bin/bash
+# Kodi - preupgrade (laeuft als Benutzer loxberry)
+#
+# command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
 
-# To use important variables from command line use the following code:
-ARGV0=$0 # Zero argument is shell command
-# echo "<INFO> Command is: $ARGV0"
+ARGV1=$1   # Temporaerer Ordner waehrend der Installation
+ARGV3=$3   # Installationsordner des Plugins
+ARGV5=$5   # Wurzelverzeichnis des LoxBerry
 
-ARGV1=$1 # First argument is temp folder during install
-# echo "<INFO> Temporary folder is: $ARGV1"
+BASE="${ARGV5:-$LBHOMEDIR}"
+PDIR="${ARGV3:-kodi}"
 
-ARGV2=$2 # Second argument is Plugin-Name for scipts etc.
-# echo "<INFO> (Short) Name is: $ARGV2"
+# Geschweifte Klammern statt Rueckstrich.
+#
+# Bis 1.0.0 stand hier /tmp/$ARGV1\_upgrade. In bash beendet der Rueckstrich
+# den Variablennamen, es funktionierte also - aber es ist genau die Sorte
+# Schreibweise, die kippt, sobald jemand die Zeile in eine andere Shell
+# uebernimmt. ${ARGV1}_upgrade ist eindeutig.
+#
+# Wichtiger: die Sicherung liegt jetzt NICHT mehr unter /tmp. Das ist auf
+# dem LoxBerry eine Ramdisk. Dieses Plugin setzt REBOOT=true - zwischen
+# preupgrade und postupgrade kann also planmaessig ein Neustart liegen, und
+# danach waere die Ramdisk leer. Bestand hat nur, was auf der Karte liegt.
+SICHER="$BASE/data/plugins/$PDIR/upgrade_sicherung"
 
-ARGV3=$3 # Third argument is Plugin installation folder
-# echo "<INFO> Installation folder is: $ARGV3"
+echo "<INFO> Sichere die Konfiguration nach $SICHER"
+rm -rf "$SICHER" 2>/dev/null
+mkdir -p "$SICHER/config" 2>/dev/null
+chmod 0700 "$SICHER" 2>/dev/null
 
-ARGV4=$4 # Forth argument is Plugin version
-# echo "<INFO> Installation folder is: $ARGV4"
+# Existenz PRUEFEN, bevor kopiert wird: ohne diese Bedingung meldete cp
+# "No such file or directory" ins Installationsprotokoll, sobald es noch
+# gar keine Konfiguration gab.
+if [ -d "$BASE/config/plugins/$PDIR" ] \
+   && [ -n "$(ls -A "$BASE/config/plugins/$PDIR" 2>/dev/null)" ]; then
+    cp -a "$BASE/config/plugins/$PDIR/." "$SICHER/config/" 2>/dev/null
+    echo "<OK> Konfiguration gesichert."
+else
+    echo "<INFO> Keine Konfiguration vorhanden - offenbar eine Erstinstallation."
+fi
 
-ARGV5=$5 # Fifth argument is Base folder of LoxBerry
-# echo "<INFO> Base folder is: $ARGV5"
-
-echo "<INFO> Creating temporary folders for upgrading"
-mkdir /tmp/$ARGV1\_upgrade
-mkdir /tmp/$ARGV1\_upgrade/config
-# mkdir /tmp/$ARGV1\_upgrade/log
-
-echo "<INFO> Backing up existing config files"
-cp -v -r $ARGV5/config/plugins/$ARGV3/ /tmp/$ARGV1\_upgrade/config
-
-# echo "<INFO> Backing up existing log files"
-# cp -v -r $ARGV5/log/plugins/$ARGV3/ /tmp/$ARGV1\_upgrade/log
-
-# Exit with Status 0
 exit 0

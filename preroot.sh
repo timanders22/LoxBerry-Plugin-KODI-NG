@@ -13,4 +13,15 @@ if [ -f /etc/apt/sources.list.d/kodi.list ]; then
     rm -f /etc/apt/sources.list.d/kodi.list
 fi
 
+# HIER STAND BIS 1.0.0 ausserdem ein auskommentierter Block, der
+# websocat_linuxarm32 von GitHub nach /usr/local/bin geladen haette - ein
+# alter Versuch, mit Kodi unmittelbar per WebSocket zu sprechen. Ersatzlos
+# entfernt: er war nie in Betrieb, band eine Fremddatei aus dem Netz in ein
+# Systemverzeichnis ein und liess beim Lesen offen, ob das Plugin so etwas
+# tut oder nicht.
+#
+# Ebenfalls entfallen sind rund vierzig Zeilen aus der LoxBerry-Vorlage, die
+# lediglich die Pfadvariablen ($PCGI, $PTEMPL, $PSBIN ...) zugewiesen und
+# anschliessend ausgegeben haben. Benutzt wurde davon nichts.
+
 exit 0

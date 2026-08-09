@@ -1,67 +1,28 @@
-#!/bin/bash
-
-# Bashscript which is executed by bash *AFTER* complete installation is done
-# (but *BEFORE* postupdate). Use with caution and remember, that all systems
-# may be different! Better to do this in your own Pluginscript if possible.
+#!/bin/sh
+# Kodi - postinstall (laeuft als Benutzer loxberry)
 #
-# Exit code must be 0 if executed successfull.
+# Bis 1.1.0 standen hier 67 Zeilen auskommentierter Vorlagentext, der aus
+# dem Plugin "LoxBerry Backup" stammte - samt einer Meldung ueber dessen
+# Zeitplansystem. Mit Kodi hatte davon nichts zu tun.
 #
-# Will be executed as user "loxberry".
-#
-# We add 5 arguments when executing the script:
-# command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
-#
-# For logging, print to STDOUT. You can use the following tags for showing
-# different colorized information during plugin installation:
-#
-# <OK> This was ok!"
-# <INFO> This is just for your information."
-# <WARNING> This is a warning!"
-# <ERROR> This is an error!"
-# <FAIL> This is a fail!"
+# Die eigentliche Einrichtung braucht Rootrechte und steht deshalb in
+# postroot.sh: Benutzer kodi anlegen, systemd-Unit, udev-Regeln, config.txt.
+# Hier bleibt nur, was ohne Rootrechte geht.
 
-# To use important variables from command line use the following code:
-ARGV0=$0 # Zero argument is shell command
-ARGV1=$1 # First argument is temp folder during install
-ARGV2=$2 # Second argument is Plugin-Name for scipts etc.
-ARGV3=$3 # Third argument is Plugin installation folder
-ARGV4=$4 # Forth argument is Plugin version
-ARGV5=$5 # Fifth argument is Base folder of LoxBerry
+ARGV3=$3   # Installationsordner des Plugins
+ARGV5=$5   # Wurzelverzeichnis des LoxBerry
 
-# if [ ! -e REPLACELBPLOGDIR ]; then
-	# echo "<INFO> Creating log directory REPLACELBPLOGDIR"
-	# mkdir -p REPLACELBPLOGDIR
-# fi
+BASE="${ARGV5:-$LBHOMEDIR}"
+PDIR="${ARGV3:-kodi}"
 
-# rm $LBHOMEDIR/system/cron/cron.daily/$2* >/dev/null
-# if [ $? -eq 0 ]; then
-	# echo "<WARNING> Deleting old daily schedules" 
-	# UPGRADE=1
-# fi
+mkdir -p "$BASE/log/plugins/$PDIR" "$BASE/config/plugins/$PDIR" \
+         "$BASE/data/plugins/$PDIR" 2>/dev/null
 
-# rm $LBHOMEDIR/system/cron/cron.weekly/$2* >/dev/null
-# if [ $? -eq 0 ]; then
-	# echo "<WARNING> Deleting old weekly schedules"
-	# UPGRADE=1
-# fi
+# Das mitgelieferte Hilfswerkzeug ausfuehrbar machen.
+chmod 755 "$BASE/bin/plugins/$PDIR/kodi-rpc" 2>/dev/null
+chmod 755 "$BASE/bin/plugins/$PDIR/elevatedhelper.pl" 2>/dev/null
 
-# rm $LBHOMEDIR/system/cron/cron.monthly/$2* >/dev/null
-# if [ $? -eq 0 ]; then
-	# echo "<WARNING> Deleting old monthly schedules"
-	# UPGRADE=1
-# fi
-
-# rm $LBHOMEDIR/system/cron/cron.yearly/$2* >/dev/null
-# if [ $? -eq 0 ]; then
-	# echo "<WARNING> Deleting old yearly schedules ($LBHOMEDIR/system/cron/cron.yearly/$2*) "
-	# UPGRADE=1
-# fi
-
-# if [ -n "$UPGRADE" ]; then
-	# . $LBHOMEDIR/libs/bashlib/notify.sh
-	# notify $3 Update "LoxBerry Backup changed the schedule system. Please reconfigure the schedules of your backups. No more automatic backups will be done otherwise." err
-	# echo "<WARNING> LoxBerry Backup changed the schedule system. Please reconfigure the schedules of your backups. No more automatic backups will be done otherwise."
-	# fi
-
-# Exit with Status 0
+echo "<INFO> Naechster Schritt: Plugin-Oberflaeche oeffnen."
+echo "<INFO> Dort laesst sich der Kodi-Dienst starten und der Autostart"
+echo "<INFO> einschalten; die Loxone-Vorlage steht im Reiter Einbindung."
 exit 0

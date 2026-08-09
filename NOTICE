@@ -1,0 +1,93 @@
+Kodi NG - LoxBerry-Plugin
+=========================
+
+Dieses Werk steht unter der Apache License 2.0 (siehe LICENSE).
+
+
+Urspruengliches Werk
+--------------------
+LoxBerry-Plugin-Kodi
+Copyright Christian Fenzl (christianTF)
+https://github.com/christianTF/LoxBerry-Plugin-Kodi
+Stand 0.1.2 vom April 2018, Apache License 2.0
+
+
+Weitere enthaltene Werke
+------------------------
+bin/kodi-rpc
+    Steht unter der GNU General Public License Version 3. Der vollstaendige
+    Lizenztext liegt als bin/kodi-rpc.LICENSE.txt daneben und muss
+    mitgeliefert werden.
+
+data/addons/service.callback.handler/
+    Kodi-Addon "LoxBerry Kodi Callback Handler", provider-name christiantf.
+    Eigene Lizenzdatei im Addon-Verzeichnis.
+
+
+Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
+-----------------------------------------------------------------------
+
+1.0.0  Neufassung fuer LoxBerry 3 und 4: Oberflaeche in PHP statt der
+       Perl-CGI-Fassung, config.txt-Pfad fuer Raspberry Pi OS bookworm
+       (/boot/firmware/), Absicherungen an den Stellen, die auf einem Pi 4/5
+       sonst ins Leere liefen.
+
+1.1.0  Kodi laeuft als systemd-Unit statt ueber ein SysVinit-Skript. Das alte
+       Skript wurde von systemd nur ueber die Kompatibilitaetsschicht
+       uebersetzt, und die kannte die Abhaengigkeiten allein aus den
+       LSB-Kopfzeilen - dort standen $remote_fs und $syslog, ausgerechnet
+       Grafik und Ton fehlten. Kodi startete deshalb nach dem Systemstart mal
+       und mal nicht.
+
+       Die beiden udev-Regeln lagen seit jeher im Paket, wurden aber NIE
+       kopiert - weder in postroot.sh noch in postinstall.sh. Sie waren also
+       wirkungslos. Jetzt werden sie eingespielt.
+
+       uninstall/uninstall gab es bis 1.0.0 gar nicht: nach dem Entfernen des
+       Plugins blieben Systemdienst, udev-Regeln und sudoers-Regel stehen, und
+       Kodi lief beim naechsten Systemstart weiter.
+
+1.1.0  Eigene Kennung und eigener Name: "Kodi NG", Ordner kodi_ng.
+
+       WARUM DIE KENNUNG WECHSELT: LoxBerry benutzt [AUTHOR] NAME und EMAIL
+       zusammen mit [PLUGIN] NAME als Kennung des Plugins, nicht als
+       Urhebervermerk. Bis 1.0.0 trug diese Fortfuehrung die Kennung des
+       Originals - samt privater Mailadresse des Originalautors -, waehrend
+       RELEASECFG bereits auf dieses Repository zeigte. Fehlerberichte waeren
+       bei einem Autor gelandet, dessen Fassung von 2018 stammt und mit dieser
+       nichts mehr zu tun hat.
+
+       WARUM AUCH DIE SYSTEMDATEIEN: Dieses Plugin legt Dateien ausserhalb
+       seines eigenen Verzeichnisses an. Sie tragen jetzt den neuen Namen:
+
+           /etc/systemd/system/kodi.service        -> kodi_ng.service
+           /etc/udev/rules.d/99-kodi.rules         -> 99-kodi_ng.rules
+           /etc/udev/rules.d/10-kodi-permissions.rules
+                                                   -> 10-kodi_ng-permissions.rules
+
+       Waeren die Namen geblieben, haette die Deinstallation dieser Fassung
+       die Dateien einer fremden, womoeglich weiterlaufenden Installation
+       mitgenommen. uninstall/uninstall entfernt deshalb nur noch die eigenen.
+
+       ABSICHTLICH NICHT UMBENANNT: der Systembenutzer "kodi" und sein
+       Heimatverzeichnis /home/kodi. Dort liegen die Medienbibliothek, die
+       Wiedergabestaende und die Zugangsdaten der Quellen. Ein neuer Benutzer
+       wuerde all das zuruecklassen. Die Unit laeuft deshalb weiter als
+       User=kodi.
+
+       KEIN PARALLELBETRIEB: es gibt nur ein Kodi auf dem Geraet, und es
+       lauscht auf TCP 9090. Zwei Installationen koennen dort nicht
+       gleichzeitig arbeiten. postroot.sh legt eine vorhandene kodi.service
+       deshalb beiseite (als kodi.service.vor-ng, fuer systemd unsichtbar) -
+       sie wird abgeschaltet, aber nicht geloescht.
+
+       AN DER LOXONE-SEITE AENDERT SICH NICHTS: Loxone spricht ueber
+       tcp://loxberry:9090 direkt mit Kodi, nicht mit dem Plugin. Der
+       Ordnername kommt in keiner Loxone-Adresse vor.
+
+
+Marken
+------
+Kodi ist eine Marke der XBMC Foundation. Dieses Plugin steht in keiner
+Verbindung zu dieser Organisation und wird von ihr weder herausgegeben noch
+unterstuetzt.

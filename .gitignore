@@ -1,35 +1,15 @@
-!Build/
-.last_cover_stats
-/META.yml
-/META.json
-/MYMETA.*
-*.o
-*.pm.tdy
-*.bs
+# Uebersetzte Python-Zwischenstaende gehoeren nicht ins Paket.
+#
+# Bis 1.1.0 lag im Addon eine default.cpython-310.pyc - entstanden, weil
+# jemand das Addon einmal mit Python 3.10 ausgefuehrt hat. Sie wurde
+# mitgeliefert und war damit auf jedem Zielsystem eine Datei, die zur dort
+# vorhandenen Python-Fassung nicht passen muss.
+__pycache__/
+*.pyc
+*.pyo
 
-# Devel::Cover
-cover_db/
-
-# Devel::NYTProf
-nytprof.out
-
-# Dizt::Zilla
-/.build/
-
-# Module::Build
-_build/
-Build
-Build.bat
-
-# Module::Install
-inc/
-
-# ExtUitls::MakeMaker
-/blib/
-/_eumm/
-/*.gz
-/Makefile
-/Makefile.old
-/MANIFEST.bak
-/pm_to_blib
-/*.zip
+# Betriebssystem- und Editorreste
+.DS_Store
+Thumbs.db
+*~
+*.swp

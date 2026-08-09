@@ -106,7 +106,24 @@ function ko_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 /* ---------------- Eingaben verarbeiten ---------------- */
 
 $ko_saved = false; $ko_err = ''; $ko_note = ''; $ko_raw = '';
-$ko_tab = preg_match('/^tab-(settings|loxone|test|log)$/', (string) (isset($_POST['activetab']) ? $_POST['activetab'] : '')) ? $_POST['activetab'] : 'tab-settings';
+/* Wer einen Reiter hinzufuegt, muss DREI Stellen mitziehen: die
+   Reiterleiste, den Bereich (ko-pane mit gleicher id) und diese
+   Positivliste. Fehlt der Name hier, springt die Seite nach jedem Absenden
+   zurueck auf Einstellungen. */
+$ko_muster = '/^tab-(settings|loxone|test|log)$/';
+$ko_tab = preg_match($ko_muster, (string) (isset($_POST['activetab']) ? $_POST['activetab'] : ''))
+    ? (string) $_POST['activetab'] : 'tab-settings';
+// Die Reiter sind echte Verweise. Wer sie anklickt oder ein Lesezeichen
+// darauf setzt, landet ueber ?form= im richtigen Bereich - auch dann, wenn
+// im Browser kein JavaScript laeuft. Bis 1.0.0 waren es <div>-Elemente, und
+// ko-active setzte ausschliesslich das JavaScript: ohne JavaScript stand
+// jeder Bereich auf display:none, die Seite war also LEER.
+if (isset($_GET['form'])) {
+    $ko_wunsch = 'tab-' . preg_replace('/[^a-z]/', '', (string) $_GET['form']);
+    if (preg_match($ko_muster, $ko_wunsch)) { $ko_tab = $ko_wunsch; }
+}
+/** Klasse fuer den gerade sichtbaren Reiter bzw. Bereich. */
+function ko_aktiv($id) { global $ko_tab; return $ko_tab === $id ? ' ko-active' : ''; }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
@@ -157,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (isset($_POST['servicestatus'])) {
-        $ko_raw = (string) @shell_exec('systemctl status kodi --no-pager 2>&1');
+        $ko_raw = (string) @shell_exec('systemctl status kodi_ng --no-pager 2>&1');
         $ko_tab = 'tab-test';
     }
 
@@ -187,7 +204,13 @@ $ko_st   = ko_status();
 $ko_port = ko_mqtt_port();
 
 $ko_frame = class_exists('LBWeb', false);
-if ($ko_frame) { LBWeb::lbheader('Kodi f&uuml;r LoxBerry', 'https://wiki.loxberry.de/', ''); }
+// Die Hilfeseite wird jetzt wirklich angeschlossen.
+//
+// Der dritte Parameter blieb bis 1.1.0 leer - templates/help/kodi_main.html
+// und die zugehoerigen Schluessel in kodi_main_de.ini/kodi_main_en.ini lagen
+// also im Paket, ohne dass das Fragezeichen oben rechts sie je angezeigt
+// haette.
+if ($ko_frame) { LBWeb::lbheader('Kodi f&uuml;r LoxBerry', 'https://wiki.loxberry.de/', 'kodi_main.html'); }
 $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST']) : '<loxberry-ip>');
 ?>
 <style>
@@ -209,7 +232,9 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 .ko-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
 .ko-small { font-size: 0.82em; color: #666; margin-top: 3px; }
 .ko-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
-.ko-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; }
+.ko-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
+  display: inline-block; text-decoration: none !important; text-shadow: none !important; }
+.ko-tab:visited, .ko-tab:hover { text-decoration: none !important; }
 .ko-tab.ko-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
 .ko-pane { display: none; padding-top: 4px; }
 .ko-pane.ko-active { display: block; }
@@ -262,14 +287,14 @@ aktivieren; der Standardport ist 11884.</div>
 <?php } ?>
 
 <div class="ko-tabs">
-    <div class="ko-tab" data-pane="tab-settings">Einstellungen</div>
-    <div class="ko-tab" data-pane="tab-loxone">Einbindung in Loxone</div>
-    <div class="ko-tab" data-pane="tab-test">Test</div>
-    <div class="ko-tab" data-pane="tab-log">Protokoll</div>
+    <a class="ko-tab<?= ko_aktiv('tab-settings') ?>" data-pane="tab-settings" href="index.php?form=settings">Einstellungen</a>
+    <a class="ko-tab<?= ko_aktiv('tab-loxone') ?>" data-pane="tab-loxone" href="index.php?form=loxone">Einbindung in Loxone</a>
+    <a class="ko-tab<?= ko_aktiv('tab-test') ?>" data-pane="tab-test" href="index.php?form=test">Test</a>
+    <a class="ko-tab<?= ko_aktiv('tab-log') ?>" data-pane="tab-log" href="index.php?form=log">Protokoll</a>
 </div>
 
 <!-- ================= Einstellungen ================= -->
-<div class="ko-pane" id="tab-settings">
+<div class="ko-pane<?= ko_aktiv('tab-settings') ?>" id="tab-settings">
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
@@ -319,7 +344,7 @@ Sie werden in die <span class="ko-mono">config.txt</span> geschrieben und wirken
 </div>
 
 <!-- ================= Einbindung in Loxone ================= -->
-<div class="ko-pane" id="tab-loxone">
+<div class="ko-pane<?= ko_aktiv('tab-loxone') ?>" id="tab-loxone">
 
 <h2>So kommen die Werte in den Miniserver</h2>
 
@@ -359,7 +384,7 @@ Ein virtueller Ausgang mit dieser Adresse gen&uuml;gt:</div>
 </div>
 
 <!-- ================= Test ================= -->
-<div class="ko-pane" id="tab-test">
+<div class="ko-pane<?= ko_aktiv('tab-test') ?>" id="tab-test">
 
 <div class="ko-legende">
 <span><i class="ko-punkt ko-b-lesen"></i> Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts</span>
@@ -401,7 +426,7 @@ Ein virtueller Ausgang mit dieser Adresse gen&uuml;gt:</div>
 </div>
 
 <!-- ================= Protokoll ================= -->
-<div class="ko-pane" id="tab-log">
+<div class="ko-pane<?= ko_aktiv('tab-log') ?>" id="tab-log">
 <h2>Protokoll</h2>
 <?php
 $ko_zeilen = is_file($ko_logfile) ? @file($ko_logfile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : array();
@@ -414,7 +439,11 @@ if ($ko_zeilen) {
 <form action="index.php" method="post" style="margin-top:10px;">
     <input data-role="none" type="hidden" name="clearlog" value="1">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
-    <button data-role="none" class="ko-btn" type="submit" style="background:#c62828;">Protokoll leeren</button>
+    <?php /* Orange, nicht rot: Rot ist im Hausstandard nicht vorgesehen -
+       es liest sich als Warnung vor einer Gefahr, und ein geleertes
+       Protokoll ist keine. Die Farbe sagt nur: dieser Knopf veraendert
+       etwas. */ ?>
+    <button data-role="none" class="ko-btn ko-b-aktion" type="submit">Protokoll leeren</button>
 </form>
 </div>
 
@@ -426,7 +455,15 @@ if ($ko_zeilen) {
         tabs.forEach(function (t) { t.classList.toggle('ko-active', t.dataset.pane === id); });
         document.querySelectorAll('.ko-pane').forEach(function (p) { p.classList.toggle('ko-active', p.id === id); });
     }
-    tabs.forEach(function (t) { t.addEventListener('click', function () { activate(t.dataset.pane); }); });
+    tabs.forEach(function (t) {
+        t.addEventListener('click', function (ereignis) {
+            // Ohne JavaScript folgt der Browser dem href, und der Server
+            // liefert den richtigen Reiter. Mit JavaScript geht es schneller
+            // ohne Neuladen - deshalb hier den Verweis abfangen.
+            ereignis.preventDefault();
+            activate(t.dataset.pane);
+        });
+    });
     activate(<?= json_encode($ko_tab) ?>);
 })();
 </script>

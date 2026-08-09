@@ -1,0 +1,14 @@
+# Eingabegeraete fuer Kodi freigeben (Fernbedienung, Tastatur, Gamepad).
+#
+# Werte in Anfuehrungszeichen - udev erwartet das so; ohne sie ist es
+# formal ungueltig und wird je nach udev-Fassung ueberlesen.
+SUBSYSTEM=="input", GROUP="kodi", MODE="0660"
+
+# HIER STAND BIS 1.0.0:
+#     KERNEL==tty[0-9]*, GROUP=tty, MODE=0660
+# Diese Zeile hat die systemweiten Rechte ALLER Terminalschnittstellen
+# ueberschrieben. Das ist keine Sache eines einzelnen Plugins: an denselben
+# tty-Geraeten haengen auf einem LoxBerry auch RS485- und DMX-Adapter
+# anderer Plugins. Ersatzlos entfernt - der Benutzer kodi wird in
+# postroot.sh ohnehin der Gruppe tty hinzugefuegt, und genau das ist der
+# vorgesehene Weg.

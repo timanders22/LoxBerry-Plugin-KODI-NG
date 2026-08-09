@@ -1,0 +1,44 @@
+[Unit]
+# Kodi als Systemdienst - loest das SysVinit-Skript aus data/kodi ab.
+#
+# Warum: LoxBerry 4 setzt auf Debian bookworm, dort ist systemd der
+# Standard. Ein SysVinit-Skript laeuft nur noch ueber die
+# Kompatibilitaetsschicht systemd-sysv-generator. Die uebersetzt zwar, kennt
+# aber die Abhaengigkeiten des Skripts nur ueber die LSB-Kopfzeilen - und
+# dort steht bei Kodi lediglich $remote_fs und $syslog. Ausgerechnet das,
+# worauf Kodi wirklich wartet (Grafik und Ton), taucht darin nicht auf.
+# Deshalb startet Kodi nach dem Systemstart mal und mal nicht.
+Description=Kodi Media Center
+# Erst starten, wenn das Netz steht und die Geraete da sind. systemd-udev-
+# settle wartet, bis udev mit dem Erkennen fertig ist - genau die Stelle,
+# an der Grafik- und Eingabegeraete auftauchen.
+After=systemd-user-sessions.service network-online.target sound.target systemd-udev-settle.service
+Wants=network-online.target
+
+[Service]
+User=kodi
+Group=kodi
+# Kodi braucht einen eigenen virtuellen Bildschirm. Ohne PAMName bekommt der
+# Dienst keine Sitzung und damit keinen Zugriff auf die Konsole.
+PAMName=login
+TTYPath=/dev/tty7
+Environment=HOME=/home/kodi
+ExecStart=/usr/bin/kodi-standalone
+# Nach einem Absturz neu starten - genau das leistete das alte Skript
+# nicht. RestartSec verhindert, dass eine dauerhaft fehlschlagende
+# Installation den Rechner mit Neustarts beschaeftigt.
+Restart=on-failure
+RestartSec=10
+# Nicht endlos: nach fuenf Fehlversuchen in zwei Minuten bleibt der Dienst
+# stehen, damit im Protokoll erkennbar wird, dass etwas grundsaetzlich
+# nicht stimmt.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+StandardOutput=journal
+StandardError=journal
+# Beim Beenden Zeit lassen: Kodi schreibt seine Datenbank noch weg.
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

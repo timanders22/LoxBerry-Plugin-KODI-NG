@@ -1,32 +1,35 @@
-#!/bin/sh
+#!/bin/bash
+# Kodi - postupgrade (laeuft als Benutzer loxberry)
 
-# To use important variables from command line use the following code:
-ARGV0=$0 # Zero argument is shell command
-# echo "<INFO> Command is: $ARGV0"
+ARGV1=$1
+ARGV3=$3
+ARGV5=$5
 
-ARGV1=$1 # First argument is temp folder during install
-# echo "<INFO> Temporary folder is: $ARGV1"
+BASE="${ARGV5:-$LBHOMEDIR}"
+PDIR="${ARGV3:-kodi}"
+SICHER="$BASE/data/plugins/$PDIR/upgrade_sicherung"
 
-ARGV2=$2 # Second argument is Plugin-Name for scipts etc.
-# echo "<INFO> (Short) Name is: $ARGV2"
+mkdir -p "$BASE/config/plugins/$PDIR" 2>/dev/null
 
-ARGV3=$3 # Third argument is Plugin installation folder
-# echo "<INFO> Installation folder is: $ARGV3"
+# Wer von 1.0.0 oder frueher kommt, hat die Sicherung noch in der Ramdisk.
+if [ ! -d "$SICHER/config" ] && [ -d "/tmp/${ARGV1}_upgrade/config" ]; then
+    SICHER="/tmp/${ARGV1}_upgrade"
+    echo "<INFO> Sicherung am alten Ort gefunden ($SICHER)."
+fi
 
-ARGV4=$4 # Forth argument is Plugin version
-# echo "<INFO> Installation folder is: $ARGV4"
+if [ -d "$SICHER/config" ] && [ -n "$(ls -A "$SICHER/config" 2>/dev/null)" ]; then
+    cp -a "$SICHER/config/." "$BASE/config/plugins/$PDIR/" 2>/dev/null
+    echo "<OK> Konfiguration zurueckgestellt."
+else
+    echo "<INFO> Keine gesicherte Konfiguration gefunden - nichts zurueckzustellen."
+fi
 
-ARGV5=$5 # Fifth argument is Base folder of LoxBerry
-# echo "<INFO> Base folder is: $ARGV5"
+chown -R loxberry:loxberry "$BASE/config/plugins/$PDIR" 2>/dev/null
 
-echo "<INFO> Copy back existing config files"
-cp -v -r /tmp/$ARGV1\_upgrade/config/$ARGV3/* $ARGV5/config/plugins/$ARGV3/ 
+rm -rf "$BASE/data/plugins/$PDIR/upgrade_sicherung" 2>/dev/null
+rm -rf "/tmp/${ARGV1}_upgrade" 2>/dev/null
 
-# echo "<INFO> Copy back existing log files"
-# cp -v -r /tmp/$ARGV1\_upgrade/log/$ARGV3/* $ARGV5/log/plugins/$ARGV3/ 
-
-echo "<INFO> Remove temporary folders"
-rm -r /tmp/$ARGV1\_upgrade
-
-# Exit with Status 0
+echo "<OK> Update abgeschlossen."
+echo "<INFO> Kodi laeuft ab 1.1.0 als systemd-Dienst statt ueber /etc/init.d/kodi."
+echo "<INFO> Zustand pruefen mit: systemctl status kodi_ng"
 exit 0

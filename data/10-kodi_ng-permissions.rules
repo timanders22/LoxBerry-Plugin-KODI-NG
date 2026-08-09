@@ -1,0 +1,17 @@
+# Zusaetzliche Eingabegeraete fuer Kodi.
+KERNEL=="mouse*|mice|event*", MODE="0660", GROUP="kodi"
+KERNEL=="ts[0-9]*|uinput", MODE="0660", GROUP="kodi"
+KERNEL=="js[0-9]*", MODE="0660", GROUP="kodi"
+SUBSYSTEM=="vchiq", GROUP="video", MODE="0660"
+
+# HIER STAND BIS 1.0.0:
+#     KERNEL==tty[0-9]*, MODE=0666
+# 0666 heisst: JEDER Benutzer auf dem System darf auf JEDE Terminal-
+# schnittstelle schreiben. Das ist deutlich weitreichender als noetig und
+# betrifft alle anderen Plugins mit. Ersatzlos entfernt.
+#
+# Zur Einordnung: beide Regeldateien wurden bis 1.0.0 ueberhaupt NICHT
+# installiert - weder postroot.sh noch postinstall.sh haben sie je nach
+# /etc/udev/rules.d/ kopiert. Sie lagen also wirkungslos im Paket. Seit
+# 1.1.0 werden sie in postroot.sh eingespielt, und deshalb muessen sie
+# jetzt auch stimmen.
