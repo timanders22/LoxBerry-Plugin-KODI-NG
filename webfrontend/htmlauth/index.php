@@ -103,11 +103,59 @@ function ko_mqtt_publish($paare) {
 
 function ko_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 
+/**
+ * Sprache der Oberflaeche.
+ *
+ * Bis 1.1.0 trug diese Datei ihre Texte unmittelbar im Quelltext; die beiden
+ * Sprachdateien waren leere Gerueste und haben nichts bewirkt. Fuer einen
+ * englischen Leser war das Plugin damit unbedienbar - der Hilfetext war
+ * uebersetzt, die Oberflaeche daneben nicht.
+ */
+function ko_sprache()
+{
+    $s = 'de';
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'lblanguage')) {
+        $s = LBSystem::lblanguage();
+    } elseif (getenv('LBLANG')) {
+        $s = getenv('LBLANG');
+    }
+    $s = strtolower(substr((string) $s, 0, 2));
+    return in_array($s, array('de', 'en'), true) ? $s : 'en';
+}
+
+/** Text zu einem Schluessel der Form ABSCHNITT.NAME. */
+function ko_t($schluessel)
+{
+    static $texte = null;
+    if ($texte === null) {
+        global $ko_lbhome, $ko_plugin;
+        $pfad = $ko_lbhome ? $ko_lbhome . '/templates/plugins/' . $ko_plugin . '/lang' : '';
+        if (!$pfad || !is_dir($pfad)) {
+            // Nicht installiert (Entwicklung): neben dem Plugin nachsehen.
+            $pfad = dirname(dirname(__DIR__)) . '/templates/lang';
+        }
+        $texte = @parse_ini_file($pfad . '/language_' . ko_sprache() . '.ini', true, INI_SCANNER_RAW);
+        if (!is_array($texte)) { $texte = array(); }
+        // Englisch als Rueckfallebene, damit eine noch nicht uebersetzte
+        // Zeile nicht als blanker Schluessel auf dem Bildschirm landet.
+        $rueck = @parse_ini_file($pfad . '/language_en.ini', true, INI_SCANNER_RAW);
+        if (is_array($rueck)) { $texte = array_replace_recursive($rueck, $texte); }
+        // INI_SCANNER_RAW liefert die Anfuehrungszeichen mit zurueck, in die
+        // die Werte laut Hausregeln stehen muessen. Die gehoeren nicht ins Bild.
+        foreach ($texte as $ab => $paare) {
+            if (!is_array($paare)) { continue; }
+            foreach ($paare as $s => $w) { $texte[$ab][$s] = trim((string) $w, '"'); }
+        }
+    }
+    list($a, $s) = array_pad(explode('.', $schluessel, 2), 2, '');
+    return isset($texte[$a][$s]) ? $texte[$a][$s] : $schluessel;
+}
+
 /* ---------------- Eingaben verarbeiten ---------------- */
 
 $ko_saved = false; $ko_err = ''; $ko_note = ''; $ko_raw = '';
 /* Wer einen Reiter hinzufuegt, muss DREI Stellen mitziehen: die
-   Reiterleiste, den Bereich (ko-pane mit gleicher id) und diese
+   Reiterleiste, den Bereich (sm-pane mit gleicher id) und diese
    Positivliste. Fehlt der Name hier, springt die Seite nach jedem Absenden
    zurueck auf Einstellungen. */
 $ko_muster = '/^tab-(settings|loxone|test|log)$/';
@@ -116,14 +164,14 @@ $ko_tab = preg_match($ko_muster, (string) (isset($_POST['activetab']) ? $_POST['
 // Die Reiter sind echte Verweise. Wer sie anklickt oder ein Lesezeichen
 // darauf setzt, landet ueber ?form= im richtigen Bereich - auch dann, wenn
 // im Browser kein JavaScript laeuft. Bis 1.0.0 waren es <div>-Elemente, und
-// ko-active setzte ausschliesslich das JavaScript: ohne JavaScript stand
+// sm-active setzte ausschliesslich das JavaScript: ohne JavaScript stand
 // jeder Bereich auf display:none, die Seite war also LEER.
 if (isset($_GET['form'])) {
     $ko_wunsch = 'tab-' . preg_replace('/[^a-z]/', '', (string) $_GET['form']);
     if (preg_match($ko_muster, $ko_wunsch)) { $ko_tab = $ko_wunsch; }
 }
 /** Klasse fuer den gerade sichtbaren Reiter bzw. Bereich. */
-function ko_aktiv($id) { global $ko_tab; return $ko_tab === $id ? ' ko-active' : ''; }
+function ko_aktiv($id) { global $ko_tab; return $ko_tab === $id ? ' sm-active' : ''; }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
@@ -163,7 +211,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (in_array($ko_was, array('start', 'stop', 'restart'), true)) {
             ko_helper('action=service key=kodi value=' . $ko_was);
             ko_log('Dienst: ' . $ko_was);
-            $ko_note = 'Befehl <b>' . ko_e($ko_was) . '</b> an den Kodi-Dienst geschickt.';
+            $ko_note = str_replace('%s', '<b>' . ko_e($ko_was) . '</b>', ko_t('TEXT.BEFEHL_GESCHICKT'));
         }
         $ko_tab = 'tab-test';
     }
@@ -187,8 +235,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'zeitstempel' => time(),
         ));
         $ko_note = $ko_n > 0
-            ? $ko_n . ' Werte an das MQTT Gateway geschickt. Im MQTT Finder unter <span class="ko-mono">' . ko_e(ko_config()['mqtt_topic']) . '/</span> nachsehen.'
-            : 'Es wurde nichts gesendet &mdash; der UDP-Eingang des MQTT Gateways ist nicht gesetzt. Im LoxBerry unter <i>Dienste &rarr; MQTT Gateway &rarr; Allgemein</i> aktivieren.';
+            ? str_replace(array('%n', '%t'), array($ko_n, '<span class="sm-mono">' . ko_e(ko_config()['mqtt_topic']) . '/</span>'), ko_t('TEXT.MQTT_GESENDET'))
+            : ko_t('TEXT.MQTT_NICHT_GESENDET');
         $ko_tab = 'tab-test';
     }
 
@@ -210,232 +258,223 @@ $ko_frame = class_exists('LBWeb', false);
 // und die zugehoerigen Schluessel in kodi_main_de.ini/kodi_main_en.ini lagen
 // also im Paket, ohne dass das Fragezeichen oben rechts sie je angezeigt
 // haette.
-if ($ko_frame) { LBWeb::lbheader('Kodi f&uuml;r LoxBerry', 'https://wiki.loxberry.de/', 'kodi_main.html'); }
+/* Der dritte Parameter hiess bis 1.1.0 'kodi_main.html' - eine Datei, die es
+ * nie gab. LBWeb::gethelp() fand nichts und zeigte den Ersatztext an; der
+ * Hilfeknopf war damit wirkungslos. Jetzt 'help.html', dazu die Texte in
+ * templates/lang/help_de.ini und help_en.ini. */
+if ($ko_frame) { LBWeb::lbheader(ko_t('ALLG.TITEL'), 'https://wiki.loxberry.de/', 'help.html'); }
 $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST']) : '<loxberry-ip>');
 ?>
 <style>
-.ko-wrap { max-width: 940px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
-.ko-wrap, .ko-wrap * { text-shadow: none !important; }
-.ko-wrap h2 { color: #6dac20; margin: 24px 0 10px; font-size: 1.15em; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
-.ko-wrap label { display: block; font-weight: 600; font-size: 0.88em; color: #555; margin: 10px 0 4px; }
-.ko-wrap input[type=text], .ko-wrap input[type=number], .ko-wrap select {
+.sm-wrap { max-width: 940px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
+.sm-wrap, .sm-wrap * { text-shadow: none !important; }
+.sm-wrap h2 { color: #6dac20; margin: 24px 0 10px; font-size: 1.15em; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
+.sm-wrap label { display: block; font-weight: 600; font-size: 0.88em; color: #555; margin: 10px 0 4px; }
+.sm-wrap input[type=text], .sm-wrap input[type=number], .sm-wrap select {
   width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
-.ko-wrap input[type=checkbox] { width: 17px; height: 17px; margin: 0; vertical-align: middle; }
-.ko-row { display: flex; gap: 12px; flex-wrap: wrap; }
-.ko-row > div { flex: 1; min-width: 150px; }
-.ko-btn { background: #6dac20; color: #fff !important; border: 0; border-radius: 6px; padding: 10px 22px; font-size: 1em; cursor: pointer; margin-top: 18px; font-weight: 600; }
-.ko-alert { border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
-.ko-ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
-.ko-err { background: #ffebee; border: 1px solid #ef9a9a; }
-.ko-warn { background: #fff8e1; border: 1px solid #ffe082; }
-.ko-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
-.ko-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
-.ko-small { font-size: 0.82em; color: #666; margin-top: 3px; }
-.ko-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
-.ko-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
+.sm-wrap input[type=checkbox] { width: 17px; height: 17px; margin: 0; vertical-align: middle; }
+.sm-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.sm-row > div { flex: 1; min-width: 150px; }
+.sm-btn { background: #6dac20; color: #fff !important; border: 0; border-radius: 6px; padding: 10px 22px; font-size: 1em; cursor: pointer; margin-top: 18px; font-weight: 600; }
+.sm-alert { border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.sm-ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
+.sm-err { background: #ffebee; border: 1px solid #ef9a9a; }
+.sm-warn { background: #fff8e1; border: 1px solid #ffe082; }
+.sm-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
+.sm-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
+.sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
+.sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
+.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
   display: inline-block; text-decoration: none !important; text-shadow: none !important; }
-.ko-tab:visited, .ko-tab:hover { text-decoration: none !important; }
-.ko-tab.ko-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
-.ko-pane { display: none; padding-top: 4px; }
-.ko-pane.ko-active { display: block; }
-.ko-log { background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
-.ko-step { margin: 10px 0; padding: 10px 14px; background: #fafafa; border-left: 4px solid #6dac20; border-radius: 0 8px 8px 0; }
-.ko-tbl { border-collapse: collapse; margin: 8px 0; }
-.ko-tbl th, .ko-tbl td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 0.9em; }
-.ko-tbl th { background: #f0f0f0; }
-.ko-wrap a.ko-btn, .ko-wrap a.ko-btn:visited, .ko-wrap a.ko-btn:hover { color: #fff !important; text-decoration: none; }
+.sm-tab:visited, .sm-tab:hover { text-decoration: none !important; }
+.sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
+.sm-pane { display: none; padding-top: 4px; }
+.sm-pane.sm-active { display: block; }
+.sm-log { background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
+.sm-step { margin: 10px 0; padding: 10px 14px; background: #fafafa; border-left: 4px solid #6dac20; border-radius: 0 8px 8px 0; }
+.sm-tbl { border-collapse: collapse; margin: 8px 0; }
+.sm-tbl th, .sm-tbl td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 0.9em; }
+.sm-tbl th { background: #f0f0f0; }
+.sm-wrap a.sm-btn, .sm-wrap a.sm-btn:visited, .sm-wrap a.sm-btn:hover { color: #fff !important; text-decoration: none; }
 
 /* --- Einheitliches Kachel-Raster im Reiter Test (Standard aller Plugins) --- */
-.ko-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
-.ko-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
-.ko-knopfreihe form { margin: 0; display: flex; }
-.ko-knopfreihe .ko-btn { flex: 0 0 auto; min-width: 250px; text-align: center;
+.sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
+.sm-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
+.sm-knopfreihe form { margin: 0; display: flex; }
+.sm-knopfreihe .sm-btn { flex: 0 0 auto; min-width: 250px; text-align: center;
     display: inline-flex; align-items: center; justify-content: center; line-height: 1.25; margin-top: 0; }
-.ko-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
-.ko-legende span { display: inline-flex; align-items: center; gap: 6px; }
-.ko-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
-.ko-btn.ko-b-lesen   { background: #6dac20; }
-.ko-btn.ko-b-technik { background: #546e7a; }
-.ko-btn.ko-b-aktion  { background: #e0620d; }
-.ko-punkt.ko-b-lesen   { background: #6dac20; }
-.ko-punkt.ko-b-technik { background: #546e7a; }
-.ko-punkt.ko-b-aktion  { background: #e0620d; }
+.sm-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
+.sm-legende span { display: inline-flex; align-items: center; gap: 6px; }
+.sm-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+.sm-btn.sm-b-lesen   { background: #6dac20; }
+.sm-btn.sm-b-technik { background: #546e7a; }
+.sm-btn.sm-b-aktion  { background: #e0620d; }
+.sm-punkt.sm-b-lesen   { background: #6dac20; }
+.sm-punkt.sm-b-technik { background: #546e7a; }
+.sm-punkt.sm-b-aktion  { background: #e0620d; }
 </style>
-<div class="ko-wrap">
+<div class="sm-wrap">
 
-<?php if ($ko_saved) { ?><div class="ko-alert ko-ok"><b>Konfiguration gespeichert</b> (Dateirechte 0600, mit Sicherungskopie f&uuml;r Updates).</div><?php } ?>
-<?php if ($ko_note !== '') { ?><div class="ko-alert ko-ok"><?= $ko_note ?></div><?php } ?>
-<?php if ($ko_err !== '') { ?><div class="ko-alert ko-err"><b>Fehler:</b> <?= $ko_err ?></div><?php } ?>
+<?php if ($ko_saved) { ?><div class="sm-alert sm-ok"><?= ko_t('TEXT.GESPEICHERT') ?></div><?php } ?>
+<?php if ($ko_note !== '') { ?><div class="sm-alert sm-ok"><?= $ko_note ?></div><?php } ?>
+<?php if ($ko_err !== '') { ?><div class="sm-alert sm-err"><b><?= ko_t('TEXT.FEHLER') ?></b> <?= $ko_err ?></div><?php } ?>
 
-<div class="ko-alert <?= (isset($ko_st['kodistarted']) && $ko_st['kodistarted']) ? 'ko-info' : 'ko-warn' ?>">
+<div class="sm-alert <?= (isset($ko_st['kodistarted']) && $ko_st['kodistarted']) ? 'sm-info' : 'sm-warn' ?>">
 <b>Kodi</b>:
 <?php if (!$ko_st) { ?>
-<b>Status nicht abrufbar</b> &mdash; l&auml;uft der Helfer? Pr&uuml;fen mit <span class="ko-mono">sudo <?= ko_e($ko_bindir) ?>/elevatedhelper.pl action=query</span>
+<?= str_replace('%s', '<span class="sm-mono">sudo ' . ko_e($ko_bindir) . '/elevatedhelper.pl action=query</span>', ko_t('TEXT.STATUS_NICHT_ABRUFBAR')) ?>
 <?php } else { ?>
-Dienst <b><?= (isset($ko_st['kodistarted']) && $ko_st['kodistarted']) ? 'l&auml;uft' : 'gestoppt' ?></b>
-&middot; Autostart <b><?= (isset($ko_st['kodiautostart']) && $ko_st['kodiautostart']) ? 'ein' : 'aus' ?></b>
+<?= ko_t('TEXT.DIENST') ?> <b><?= (isset($ko_st['kodistarted']) && $ko_st['kodistarted']) ? ko_t('TEXT.LAEUFT') : ko_t('TEXT.GESTOPPT') ?></b>
+&middot; <?= ko_t('TEXT.AUTOSTART') ?> <b><?= (isset($ko_st['kodiautostart']) && $ko_st['kodiautostart']) ? ko_t('TEXT.EIN') : ko_t('TEXT.AUS') ?></b>
 &middot; MPEG2 <?= ko_e(isset($ko_st['mpeg2status']) ? $ko_st['mpeg2status'] : '?') ?>
 &middot; VC1 <?= ko_e(isset($ko_st['vc1status']) ? $ko_st['vc1status'] : '?') ?><br>
-Seriennummer des Pi: <span class="ko-mono"><?= ko_e(isset($ko_st['piserial']) ? $ko_st['piserial'] : '?') ?></span>
+<?= ko_t('TEXT.PISERIAL') ?> <span class="sm-mono"><?= ko_e(isset($ko_st['piserial']) ? $ko_st['piserial'] : '?') ?></span>
 <?php } ?>
 </div>
 
 <?php if (!$ko_port) { ?>
-<div class="ko-alert ko-warn"><b>UDP-Eingang des MQTT Gateways nicht gesetzt.</b> Ohne ihn kommen keine Werte
-am Miniserver an. Im LoxBerry unter <i>Dienste &rarr; MQTT Gateway &rarr; Allgemein</i> den UDP-Eingang
-aktivieren; der Standardport ist 11884.</div>
+<div class="sm-alert sm-warn"><?= ko_t('TEXT.UDP_WARNUNG') ?></div>
 <?php } ?>
 
-<div class="ko-tabs">
-    <a class="ko-tab<?= ko_aktiv('tab-settings') ?>" data-pane="tab-settings" href="index.php?form=settings">Einstellungen</a>
-    <a class="ko-tab<?= ko_aktiv('tab-loxone') ?>" data-pane="tab-loxone" href="index.php?form=loxone">Einbindung in Loxone</a>
-    <a class="ko-tab<?= ko_aktiv('tab-test') ?>" data-pane="tab-test" href="index.php?form=test">Test</a>
-    <a class="ko-tab<?= ko_aktiv('tab-log') ?>" data-pane="tab-log" href="index.php?form=log">Protokoll</a>
+<div class="sm-tabs">
+    <a class="sm-tab<?= ko_aktiv('tab-settings') ?>" data-pane="tab-settings" href="index.php?form=settings"><?= ko_t('REITER.EINSTELLUNGEN') ?></a>
+    <a class="sm-tab<?= ko_aktiv('tab-loxone') ?>" data-pane="tab-loxone" href="index.php?form=loxone"><?= ko_t('REITER.LOXONE') ?></a>
+    <a class="sm-tab<?= ko_aktiv('tab-test') ?>" data-pane="tab-test" href="index.php?form=test"><?= ko_t('REITER.TEST') ?></a>
+    <a class="sm-tab<?= ko_aktiv('tab-log') ?>" data-pane="tab-log" href="index.php?form=log"><?= ko_t('REITER.LOG') ?></a>
 </div>
 
 <!-- ================= Einstellungen ================= -->
-<div class="ko-pane<?= ko_aktiv('tab-settings') ?>" id="tab-settings">
+<div class="sm-pane<?= ko_aktiv('tab-settings') ?>" id="tab-settings">
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
 <h2>Kodi</h2>
-<div class="ko-row">
+<div class="sm-row">
     <div>
-        <label>Adresse des Kodi-Rechners</label>
+        <label><?= ko_t('TEXT.L_HOST') ?></label>
         <input data-role="none" type="text" name="kodi_host" value="<?= ko_e($ko_cfg['kodi_host']) ?>">
-        <div class="ko-small">Meist <span class="ko-mono">127.0.0.1</span>, wenn Kodi auf demselben LoxBerry l&auml;uft.</div>
+        <div class="sm-small"><?= str_replace('%s', '<span class="sm-mono">127.0.0.1</span>', ko_t('TEXT.H_HOST')) ?></div>
     </div>
     <div>
-        <label>Port des Webinterface</label>
+        <label><?= ko_t('TEXT.L_PORT') ?></label>
         <input data-role="none" type="number" name="kodi_port" value="<?= (int) $ko_cfg['kodi_port'] ?>">
     </div>
 </div>
 
 <label style="margin-top:16px;">
     <input data-role="none" type="checkbox" name="kodiautostart" value="1" <?= (isset($ko_st['kodiautostart']) && $ko_st['kodiautostart']) ? 'checked' : '' ?>>
-    Kodi beim Hochfahren automatisch starten
+    <?= ko_t('TEXT.L_AUTOSTART') ?>
 </label>
 
 <h2>MQTT</h2>
-<label>MQTT-Thema</label>
+<label><?= ko_t('TEXT.L_THEMA') ?></label>
 <input data-role="none" type="text" name="mqtt_topic" value="<?= ko_e($ko_cfg['mqtt_topic']) ?>">
-<div class="ko-small">Die Werte erscheinen darunter, zum Beispiel <span class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/dienst</span>.</div>
+<div class="sm-small"><?= str_replace('%s', '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/dienst</span>', ko_t('TEXT.H_THEMA')) ?></div>
 
-<h2>Lizenzschl&uuml;ssel</h2>
-<div class="ko-alert ko-info">
-Die Schl&uuml;ssel gibt es im Raspberry-Pi-Shop, gebunden an die Seriennummer
-<span class="ko-mono"><?= ko_e(isset($ko_st['piserial']) ? $ko_st['piserial'] : '?') ?></span>.
-Sie werden in die <span class="ko-mono">config.txt</span> geschrieben und wirken erst nach einem Neustart.
-<b>Ein leeres Feld l&ouml;scht nichts</b> &mdash; der gespeicherte Wert bleibt stehen.
+<h2><?= ko_t('TEXT.H_LIZENZ') ?></h2>
+<div class="sm-alert sm-info">
+<?= str_replace('%s', '<span class="sm-mono">' . ko_e(isset($ko_st['piserial']) ? $ko_st['piserial'] : '?') . '</span>', ko_t('TEXT.LIZENZ_HINWEIS')) ?>
 </div>
-<div class="ko-row">
+<div class="sm-row">
     <div>
-        <label>MPEG2 &mdash; hinterlegt: <span class="ko-mono"><?= ko_e(isset($ko_st['mpeg2lic']) && $ko_st['mpeg2lic'] !== '' ? $ko_st['mpeg2lic'] : 'keiner') ?></span></label>
+        <label>MPEG2 &mdash; <?= ko_t('TEXT.HINTERLEGT') ?> <span class="sm-mono"><?= ko_e(isset($ko_st['mpeg2lic']) && $ko_st['mpeg2lic'] !== '' ? $ko_st['mpeg2lic'] : ko_t('TEXT.KEINER')) ?></span></label>
         <input data-role="none" type="text" name="licmpeg2" value="" placeholder="0x00000000">
     </div>
     <div>
-        <label>VC1 &mdash; hinterlegt: <span class="ko-mono"><?= ko_e(isset($ko_st['vc1lic']) && $ko_st['vc1lic'] !== '' ? $ko_st['vc1lic'] : 'keiner') ?></span></label>
+        <label>VC1 &mdash; <?= ko_t('TEXT.HINTERLEGT') ?> <span class="sm-mono"><?= ko_e(isset($ko_st['vc1lic']) && $ko_st['vc1lic'] !== '' ? $ko_st['vc1lic'] : ko_t('TEXT.KEINER')) ?></span></label>
         <input data-role="none" type="text" name="licvc1" value="" placeholder="0x00000000">
     </div>
 </div>
 
-<button data-role="none" class="ko-btn" type="submit" name="save" value="1">Speichern</button>
+<button data-role="none" class="sm-btn" type="submit" name="save" value="1"><?= ko_t('ALLG.SPEICHERN') ?></button>
 </form>
 </div>
 
 <!-- ================= Einbindung in Loxone ================= -->
-<div class="ko-pane<?= ko_aktiv('tab-loxone') ?>" id="tab-loxone">
+<div class="sm-pane<?= ko_aktiv('tab-loxone') ?>" id="tab-loxone">
 
-<h2>So kommen die Werte in den Miniserver</h2>
+<h2><?= ko_t('TEXT.H_LOXONE') ?></h2>
 
-<div class="ko-step"><b>1. UDP-Eingang des Gateways aktivieren.</b> Das MQTT Gateway geh&ouml;rt zu LoxBerry
-&mdash; du findest es im Hauptmen&uuml; unter <i>Dienste &rarr; MQTT Gateway</i>, ein Plugin muss daf&uuml;r nicht
-installiert werden. Unter <i>Allgemein</i> den UDP-Eingang einschalten (Standardport 11884). Dieser Port ist
-derzeit <b><?= $ko_port ? ko_e($ko_port) : 'nicht gesetzt' ?></b>.</div>
+<div class="sm-step"><?= str_replace('%s', '<b>' . ($ko_port ? ko_e($ko_port) : ko_t('TEXT.NICHT_GESETZT')) . '</b>', ko_t('TEXT.SCHRITT1')) ?></div>
 
-<div class="ko-step"><b>2. Themen finden.</b> Im MQTT Gateway den <i>MQTT Finder</i> &ouml;ffnen und den Zweig
-<span class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/</span> aufklappen. Dort erscheint, was Kodi meldet.
-Zum Ausprobieren im Reiter <i>Test</i> auf <i>Test-Ereignis an MQTT senden</i> dr&uuml;cken.</div>
+<div class="sm-step"><?= str_replace('%s', '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/</span>', ko_t('TEXT.SCHRITT2')) ?></div>
 
-<div class="ko-step"><b>3. In Loxone verwenden.</b> Im Gateway die gew&uuml;nschten Themen dem Miniserver
-zuweisen; sie erscheinen dort als virtuelle Eing&auml;nge. Ein eigener virtueller Ausgang ist daf&uuml;r
-nicht n&ouml;tig.</div>
+<div class="sm-step"><?= ko_t('TEXT.SCHRITT3') ?></div>
 
-<h2>Themen</h2>
-<table class="ko-tbl">
-<tr><th>Thema</th><th>Bedeutung</th><th>Werte</th></tr>
-<tr><td class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/dienst</td><td>Kodi-Dienst</td><td>1 = l&auml;uft, 0 = gestoppt</td></tr>
-<tr><td class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/autostart</td><td>Autostart</td><td>1 = ein, 0 = aus</td></tr>
-<tr><td class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/zeitstempel</td><td>Zeitpunkt der letzten Meldung</td><td>Unix-Zeit</td></tr>
-<tr><td class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/status</td><td>Wiedergabe</td><td>play, pause, stop</td></tr>
-<tr><td class="ko-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/titel</td><td>laufender Titel</td><td>Text</td></tr>
+<h2><?= ko_t('TEXT.H_THEMEN') ?></h2>
+<table class="sm-tbl">
+<tr><th><?= ko_t('TEXT.TH_THEMA') ?></th><th><?= ko_t('TEXT.TH_BEDEUTUNG') ?></th><th><?= ko_t('TEXT.TH_WERTE') ?></th></tr>
+<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/dienst</td><td><?= ko_t('TEXT.T_DIENST') ?></td><td><?= ko_t('TEXT.V_DIENST') ?></td></tr>
+<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/autostart</td><td><?= ko_t('TEXT.AUTOSTART') ?></td><td><?= ko_t('TEXT.V_AUTOSTART') ?></td></tr>
+<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/zeitstempel</td><td><?= ko_t('TEXT.T_ZEIT') ?></td><td><?= ko_t('TEXT.V_ZEIT') ?></td></tr>
+<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/status</td><td><?= ko_t('TEXT.T_STATUS') ?></td><td>play, pause, stop</td></tr>
+<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/titel</td><td><?= ko_t('TEXT.T_TITEL') ?></td><td><?= ko_t('TEXT.V_TITEL') ?></td></tr>
 </table>
-<div class="ko-small">Die letzten beiden liefert das Kodi-Addon <i>Callback Handler</i>, sobald in Kodi
-etwas abgespielt wird. Die ersten drei kommen vom Plugin selbst.</div>
+<div class="sm-small"><?= ko_t('TEXT.THEMEN_HINWEIS') ?></div>
 
-<h2>Kodi steuern</h2>
-<div class="ko-small">Umgekehrt &mdash; also Loxone steuert Kodi &mdash; geht &uuml;ber die JSON-RPC-Schnittstelle.
-Ein virtueller Ausgang mit dieser Adresse gen&uuml;gt:</div>
-<div class="ko-step ko-mono">http://<?= ko_e($ko_cfg['kodi_host']) ?>:<?= (int) $ko_cfg['kodi_port'] ?>/jsonrpc</div>
-<div class="ko-small">Die fertige Vorlage <span class="ko-mono">VO_Kodi_V1.xml</span> liegt im Plugin-Ordner unter
-<span class="ko-mono">data/</span> und l&auml;sst sich in Loxone Config &uuml;ber
-<i>Virtueller Ausgang &rarr; Vorlage einf&uuml;gen</i> laden.</div>
+<h2><?= ko_t('TEXT.H_STEUERN') ?></h2>
+<div class="sm-small"><?= ko_t('TEXT.STEUERN_TEXT') ?></div>
+<div class="sm-step sm-mono">http://<?= ko_e($ko_cfg['kodi_host']) ?>:<?= (int) $ko_cfg['kodi_port'] ?>/jsonrpc</div>
+<div class="sm-small"><?= ko_t('TEXT.VORLAGE_HINWEIS') ?></div>
 
 </div>
 
 <!-- ================= Test ================= -->
-<div class="ko-pane<?= ko_aktiv('tab-test') ?>" id="tab-test">
+<div class="sm-pane<?= ko_aktiv('tab-test') ?>" id="tab-test">
 
-<div class="ko-legende">
-<span><i class="ko-punkt ko-b-lesen"></i> Ansehen &mdash; fragt nur ab, ver&auml;ndert nichts</span>
-<span><i class="ko-punkt ko-b-technik"></i> Technische Auskunft &mdash; f&uuml;r die Fehlersuche</span>
-<span><i class="ko-punkt ko-b-aktion"></i> L&ouml;st etwas aus &mdash; sendet oder ver&auml;ndert etwas</span>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= ko_t('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= ko_t('LEGENDE.TECHNIK') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_t('LEGENDE.AKTION') ?></span>
 </div>
 
-<h3 class="ko-h3">Ansehen</h3>
-<div class="ko-knopfreihe">
-    <a class="ko-btn ko-b-lesen" href="">Status neu abfragen</a>
-    <a class="ko-btn ko-b-lesen" href="http://<?= ko_e($ko_cfg['kodi_host'] === '127.0.0.1' ? $ko_host : $ko_cfg['kodi_host']) ?>:<?= (int) $ko_cfg['kodi_port'] ?>" target="_blank">Kodi-Webinterface &ouml;ffnen</a>
+<h3 class="sm-h3"><?= ko_t('TEXT.H3_ANSEHEN') ?></h3>
+<div class="sm-knopfreihe">
+    <a class="sm-btn sm-b-lesen" href=""><?= ko_t('TEXT.K_STATUS_NEU') ?></a>
+    <a class="sm-btn sm-b-lesen" href="http://<?= ko_e($ko_cfg['kodi_host'] === '127.0.0.1' ? $ko_host : $ko_cfg['kodi_host']) ?>:<?= (int) $ko_cfg['kodi_port'] ?>" target="_blank"><?= ko_t('TEXT.K_WEBINTERFACE') ?></a>
 </div>
 
-<h3 class="ko-h3">Technische Auskunft</h3>
-<div class="ko-knopfreihe">
+<h3 class="sm-h3"><?= ko_t('TEXT.H3_TECHNIK') ?></h3>
+<div class="sm-knopfreihe">
     <form action="index.php" method="post"><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="ko-btn ko-b-technik" type="submit" name="rawstatus" value="1">Rohdaten der Statusabfrage</button></form>
+        <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="rawstatus" value="1"><?= ko_t('TEXT.K_ROHDATEN') ?></button></form>
     <form action="index.php" method="post"><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="ko-btn ko-b-technik" type="submit" name="servicestatus" value="1">Dienstzustand (systemctl)</button></form>
+        <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="servicestatus" value="1"><?= ko_t('TEXT.K_DIENSTZUSTAND') ?></button></form>
 </div>
 
-<h3 class="ko-h3">L&ouml;st etwas aus</h3>
-<div class="ko-knopfreihe">
+<h3 class="sm-h3"><?= ko_t('TEXT.H3_AKTION') ?></h3>
+<div class="sm-knopfreihe">
     <form action="index.php" method="post"><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="ko-btn ko-b-aktion" type="submit" name="service" value="start">Kodi starten</button></form>
+        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="start"><?= ko_t('TEXT.K_START') ?></button></form>
     <form action="index.php" method="post"><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="ko-btn ko-b-aktion" type="submit" name="service" value="stop">Kodi stoppen</button></form>
+        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="stop"><?= ko_t('TEXT.K_STOP') ?></button></form>
     <form action="index.php" method="post"><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="ko-btn ko-b-aktion" type="submit" name="service" value="restart">Kodi neu starten</button></form>
+        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="restart"><?= ko_t('TEXT.K_NEUSTART') ?></button></form>
     <form action="index.php" method="post"><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="ko-btn ko-b-aktion" type="submit" name="mqtttest" value="1">Test-Ereignis an MQTT senden</button></form>
+        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mqtttest" value="1"><?= ko_t('TEXT.K_MQTTTEST') ?></button></form>
 </div>
 
 <?php if ($ko_raw !== '') { ?>
-<h2>Ausgabe</h2>
-<div class="ko-log"><?= ko_e($ko_raw) ?></div>
+<h2><?= ko_t('TEXT.H_AUSGABE') ?></h2>
+<div class="sm-log"><?= ko_e($ko_raw) ?></div>
 <?php } ?>
 
 </div>
 
 <!-- ================= Protokoll ================= -->
-<div class="ko-pane<?= ko_aktiv('tab-log') ?>" id="tab-log">
-<h2>Protokoll</h2>
+<div class="sm-pane<?= ko_aktiv('tab-log') ?>" id="tab-log">
+<h2><?= ko_t('REITER.LOG') ?></h2>
 <?php
 $ko_zeilen = is_file($ko_logfile) ? @file($ko_logfile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : array();
 if ($ko_zeilen) {
     $ko_zeilen = array_slice($ko_zeilen, -300);
-    echo '<div class="ko-log">' . ko_e(implode("\n", array_reverse($ko_zeilen))) . '</div>';
+    echo '<div class="sm-log">' . ko_e(implode("\n", array_reverse($ko_zeilen))) . '</div>';
 } else { ?>
-<div class="ko-alert ko-info">Noch keine Protokoll-Eintr&auml;ge vorhanden.</div>
+<div class="sm-alert sm-info"><?= ko_t('TEXT.KEIN_PROTOKOLL') ?></div>
 <?php } ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_t('LEGENDE.AKTION') ?></span>
+</div>
 <form action="index.php" method="post" style="margin-top:10px;">
     <input data-role="none" type="hidden" name="clearlog" value="1">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
@@ -443,17 +482,17 @@ if ($ko_zeilen) {
        es liest sich als Warnung vor einer Gefahr, und ein geleertes
        Protokoll ist keine. Die Farbe sagt nur: dieser Knopf veraendert
        etwas. */ ?>
-    <button data-role="none" class="ko-btn ko-b-aktion" type="submit">Protokoll leeren</button>
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ko_t('TEXT.K_LOG_LEEREN') ?></button>
 </form>
 </div>
 
 </div>
 <script>
 (function () {
-    var tabs = document.querySelectorAll('.ko-tab');
+    var tabs = document.querySelectorAll('.sm-tab');
     function activate(id) {
-        tabs.forEach(function (t) { t.classList.toggle('ko-active', t.dataset.pane === id); });
-        document.querySelectorAll('.ko-pane').forEach(function (p) { p.classList.toggle('ko-active', p.id === id); });
+        tabs.forEach(function (t) { t.classList.toggle('sm-active', t.dataset.pane === id); });
+        document.querySelectorAll('.sm-pane').forEach(function (p) { p.classList.toggle('sm-active', p.id === id); });
     }
     tabs.forEach(function (t) {
         t.addEventListener('click', function (ereignis) {
