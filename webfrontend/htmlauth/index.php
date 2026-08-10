@@ -16,7 +16,32 @@ ini_set('display_errors', '1');
 
 $ko_lbhome = getenv('LBHOMEDIR') ?: lb_wurzel_ermitteln();
 $ko_plugin = getenv('LBPPLUGINDIR') ?: basename(dirname(__DIR__));
-if ($ko_lbhome && is_dir($ko_lbhome . '/config/plugins/' . $ko_plugin) === false) { $ko_plugin = 'kodi'; }
+
+/* HIER STAND BIS 1.1.2 DER FEHLER, DER DIE GANZE OBERFLAECHE UNBESCHRIFTET
+ * LIESS - auf dem Bildschirm standen ALLG.TITEL, REITER.LOXONE, TEXT.L_THEMA
+ * statt der Texte.
+ *
+ * Die Zeile lautete:
+ *   if (is_dir($home . '/config/plugins/' . $plugin) === false) { $plugin = 'kodi'; }
+ *
+ * Zwei Fehler auf einmal:
+ *
+ * 1. Sie schloss vom KONFIGURATIONSORDNER auf den VORLAGENORDNER. Das eine
+ *    sagt nichts ueber das andere. Wer das Plugin installiert und die
+ *    Einstellungen noch nie gespeichert hat, hat unter Umstaenden keinen
+ *    Konfigurationsordner - die Sprachdateien liegen trotzdem da.
+ *
+ * 2. Der Rueckfallwert 'kodi' war der Ordnername VOR der Umbenennung auf
+ *    'kodi_ng'. Ein Verzeichnis templates/plugins/kodi/lang gibt es nicht
+ *    mehr. parse_ini_file fand also nichts, ko_t() gab den Schluessel
+ *    zurueck - und genau das stand dann auf dem Bildschirm.
+ *
+ * Und es fiel nicht auf, weil @parse_ini_file die Warnung schluckt und
+ * ko_t() den Schluessel als Text zurueckgibt: die Seite baut sich auf, es
+ * gibt keinen Fehler, sie ist nur unlesbar.
+ *
+ * Richtig ist, nach dem Ordner zu suchen, um den es geht - dem mit den
+ * Sprachdateien. Siehe ko_langdir(). */
 if ($ko_lbhome) {
     $ko_sdk = $ko_lbhome . '/libs/phplib/loxberry_system.php';
     if (file_exists($ko_sdk)) { require_once $ko_sdk; require_once $ko_lbhome . '/libs/phplib/loxberry_web.php'; }
@@ -167,17 +192,60 @@ function ko_sprache()
     return in_array($s, array('de', 'en'), true) ? $s : 'en';
 }
 
+/**
+ * Der Ordner mit den Sprachdateien.
+ *
+ * Gesucht wird nach dem Ordner, der wirklich eine language_de.ini enthaelt -
+ * nicht nach einem anderen Ordner, aus dem man auf ihn schliessen koennte.
+ * Geprueft werden der Reihe nach:
+ *
+ *   1. der ermittelte Pluginordner (LBPPLUGINDIR oder aus dem Ablageort)
+ *   2. der Ordnername aus der plugin.cfg
+ *   3. der Ordner neben dem Plugin - so liegt es im entpackten Archiv
+ *
+ * Findet keiner etwas, wird das GEMELDET statt stillschweigend Schluessel
+ * anzuzeigen: eine unbeschriftete Oberflaeche sieht aus wie ein Bedienfehler
+ * des Anwenders, nicht wie ein Fehler des Plugins.
+ */
+function ko_langdir()
+{
+    static $gefunden = null;
+    if ($gefunden !== null) { return $gefunden; }
+    global $ko_lbhome, $ko_plugin;
+
+    $kandidaten = array();
+    if ($ko_lbhome) {
+        $kandidaten[] = $ko_lbhome . '/templates/plugins/' . $ko_plugin . '/lang';
+        /* Der eigene Ordnername als zweiter Kandidat.
+         *
+         * Er steht in der plugin.cfg - die liegt im installierten Zustand
+         * aber NICHT neben dieser Datei, sondern unter data/plugins/, und
+         * dorthin fuehrt nur der Name, den wir gerade suchen. Das waere im
+         * Kreis gelaufen. Der Name des eigenen Plugins ist eine Konstante
+         * dieses Quelltextes und darf hier stehen; ein Systempfad duerfte es
+         * nicht. */
+        $kandidaten[] = $ko_lbhome . '/templates/plugins/kodi_ng/lang';
+    }
+    // Entpacktes Archiv: die Sprachdateien liegen neben dem webfrontend.
+    $kandidaten[] = dirname(dirname(__DIR__)) . '/templates/lang';
+    $kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/templates/lang';
+
+    foreach ($kandidaten as $k) {
+        if (is_file($k . '/language_de.ini') || is_file($k . '/language_en.ini')) {
+            $gefunden = $k;
+            return $gefunden;
+        }
+    }
+    $gefunden = '';
+    return $gefunden;
+}
+
 /** Text zu einem Schluessel der Form ABSCHNITT.NAME. */
 function ko_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        global $ko_lbhome, $ko_plugin;
-        $pfad = $ko_lbhome ? $ko_lbhome . '/templates/plugins/' . $ko_plugin . '/lang' : '';
-        if (!$pfad || !is_dir($pfad)) {
-            // Nicht installiert (Entwicklung): neben dem Plugin nachsehen.
-            $pfad = dirname(dirname(__DIR__)) . '/templates/lang';
-        }
+        $pfad = ko_langdir();
         $texte = @parse_ini_file($pfad . '/language_' . ko_sprache() . '.ini', true, INI_SCANNER_RAW);
         if (!is_array($texte)) { $texte = array(); }
         // Englisch als Rueckfallebene, damit eine noch nicht uebersetzte
@@ -193,6 +261,19 @@ function ko_t($schluessel)
     }
     list($a, $s) = array_pad(explode('.', $schluessel, 2), 2, '');
     return isset($texte[$a][$s]) ? $texte[$a][$s] : $schluessel;
+}
+
+/**
+ * Wurde ueberhaupt eine Sprachdatei gefunden?
+ *
+ * Die Oberflaeche zeigt daraus einen Hinweis. Ohne ihn stehen nur die
+ * Schluessel auf dem Bildschirm, und das sieht nach einem Bedienfehler aus
+ * statt nach einer fehlenden Datei - genau so ist der Fehler bis 1.1.2
+ * unbemerkt geblieben.
+ */
+function ko_sprache_fehlt()
+{
+    return ko_langdir() === '';
 }
 
 /* ---------------- Eingaben verarbeiten ---------------- */
@@ -358,6 +439,18 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 .sm-punkt.sm-b-aktion  { background: #e0620d; }
 </style>
 <div class="sm-wrap">
+
+<?php if (ko_sprache_fehlt()) { ?>
+<!-- Bewusst fest im Quelltext und nicht ueber ko_t(): wenn diese
+     Meldung noetig ist, kann ko_t() nichts uebersetzen. -->
+<div class="sm-alert sm-err">
+  <b>Die Sprachdateien wurden nicht gefunden.</b>
+  Deshalb stehen unten nur die Schl&uuml;ssel (ALLG.TITEL, REITER.LOXONE …)
+  statt der Texte. Erwartet werden sie unter
+  <span class="sm-mono">&lt;LoxBerry&gt;/templates/plugins/<?= htmlspecialchars((string) $ko_plugin, ENT_QUOTES, 'UTF-8') ?>/lang/</span>.
+  Meist hilft ein erneutes Installieren des Plugins.
+</div>
+<?php } ?>
 
 <?php if ($ko_saved) { ?><div class="sm-alert sm-ok"><?= ko_t('TEXT.GESPEICHERT') ?></div><?php } ?>
 <?php if ($ko_note !== '') { ?><div class="sm-alert sm-ok"><?= $ko_note ?></div><?php } ?>
