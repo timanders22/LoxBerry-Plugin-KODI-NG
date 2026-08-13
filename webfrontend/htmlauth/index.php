@@ -276,6 +276,86 @@ function ko_sprache_fehlt()
     return ko_langdir() === '';
 }
 
+/** Vorlage der Gateway-Eingaenge nach dem Heimkino-Kunstgriff (12.08.2026):
+ *  VirtualInHttp mit Dummy-Adresse http://localhost und Abfragezyklus 604800 s,
+ *  nur damit Loxone die richtig benannten Eingaenge anlegt - die Werte kommen
+ *  vom MQTT-Gateway. Format wie Original-Export aus Loxone Config 17.1.
+ *  Enthalten sind nur die drei Zahlenwerte aus der Themen-Tabelle im Reiter
+ *  "Einbindung in Loxone"; die Textwerte status und titel bleiben aussen vor. */
+function ko_vorlage()
+{
+    $cfg = ko_config();
+    $topic = trim((string) $cfg['mqtt_topic']) !== '' ? trim((string) $cfg['mqtt_topic']) : 'kodi';
+    $crlf = "\r\n";
+    $werte = array(
+        array('dienst',      'Kodi-Dienst (1 = laeuft, 0 = gestoppt)',     '0', '1',          '<v.0>'),
+        array('autostart',   'Autostart (1 = ein, 0 = aus)',               '0', '1',          '<v.0>'),
+        array('zeitstempel', 'Zeitpunkt der letzten Meldung (Unix-Zeit)',  '0', '2147483647', '<v.0>'),
+    );
+    $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualInHttp HintText="" Title="Kodi Zustand" Comment="Erzeugt vom LoxBerry-Plugin Kodi (' . date('d.m.Y') . '). Werte kommen vom MQTT-Gateway - Abo ' . htmlspecialchars($topic, ENT_QUOTES | ENT_XML1, 'UTF-8') . '/# noetig." Address="http://localhost" PollingTime="604800">' . $crlf;
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
+    foreach ($werte as $w) {
+        $o .= "\t" . '<VirtualInHttpCmd Title="' . htmlspecialchars($topic . '_' . $w[0], ENT_QUOTES | ENT_XML1, 'UTF-8') . '" ';
+        $o .= 'Comment="' . htmlspecialchars($w[1], ENT_QUOTES | ENT_XML1, 'UTF-8') . '" Check=" " ';
+        $o .= 'Signed="false" Analog="true" SourceValLow="0" DestValLow="0" SourceValHigh="1" DestValHigh="1" DefVal="0" MinVal="' . $w[2] . '" MaxVal="' . $w[3] . '" Unit="' . htmlspecialchars($w[4], ENT_QUOTES | ENT_XML1, 'UTF-8') . '" HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualInHttp>' . $crlf;
+    return array('VI_kodi.xml', $o);
+}
+
+/** VO-Vorlage dynamisch (seit 1.1.6): dieselben Befehle wie das mitgelieferte
+ *  data/VO_Kodi_V1.xml, aber mit der konfigurierten Kodi-Adresse, der
+ *  Info-Zeile des Originalformats (templateType 3) und HintText-Attributen.
+ *  Die JSON-Befehle gehen an Kodis TCP-Schnittstelle (Port 9090). */
+function ko_vorlage_vo()
+{
+    $cfg = ko_config();
+    $host = trim((string) $cfg['kodi_host']) !== '' && $cfg['kodi_host'] !== '127.0.0.1'
+        ? $cfg['kodi_host']
+        : (isset($_SERVER['HTTP_HOST']) ? preg_replace('/:.*$/', '', (string) $_SERVER['HTTP_HOST']) : 'loxberry');
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="Kodi steuern (LoxBerry-Plugin)" Comment="Erzeugt vom LoxBerry-Plugin Kodi (' . date('d.m.Y') . '). JSON-RPC an Kodis TCP-Schnittstelle." Address="tcp://' . htmlspecialchars($host, ENT_QUOTES | ENT_XML1, 'UTF-8') . ':9090" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    foreach (array(
+        array('Input.Back', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Back&quot;, &quot;id&quot;: 1}'),
+        array('Input.ContextMenu', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Context.Menu&quot;, &quot;id&quot;: 1}'),
+        array('Input.Down', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Down&quot;, &quot;id&quot;: 1}'),
+        array('Input.Home', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Home&quot;, &quot;id&quot;: 1}'),
+        array('Input.Info', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Info&quot;, &quot;id&quot;: 1}'),
+        array('Input.Left', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Left&quot;, &quot;id&quot;: 1}'),
+        array('Input.Right', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Right&quot;, &quot;id&quot;: 1}'),
+        array('Input.Select', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Select&quot;, &quot;id&quot;: 1}'),
+        array('Input.ShowOSD', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.ShowOSD&quot;, &quot;id&quot;: 1}'),
+        array('Input.Up', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Up&quot;, &quot;id&quot;: 1}'),
+        array('Player.Seek Forward', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Seek&quot;,&quot;params&quot;:{ &quot;playerid&quot;:1,&quot;value&quot;:&quot;smallforward&quot;},&quot;id&quot;:1}'),
+        array('Player.Seek Backwards', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Seek&quot;,&quot;params&quot;:{ &quot;playerid&quot;:1, &quot;value&quot;:&quot;smallbackward&quot;},&quot;id&quot;:1}'),
+        array('Player.Stop', '{&quot;jsonrpc&quot;:&quot;2.0&quot;, &quot;method&quot;:&quot;Player.Stop&quot;,&quot;params&quot;:{ &quot;playerid&quot;:1},&quot;id&quot;:1}'),
+        array('Player.PlayPause Play', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;play&quot;:true},&quot;id&quot;:1}'),
+        array('Player.PlayPause Pause', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;play&quot;:false},&quot;id&quot;:1} '),
+        array('Player.PlayPause Toggle', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{ &quot;playerid&quot;: 1},&quot;id&quot;:1} '),
+        array('Player.GoTo Next', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.GoTo&quot;,&quot;params&quot;:{ &quot;playerid&quot;:1,&quot;to&quot;:&quot;next&quot;},&quot;id&quot;:1}'),
+        array('Player.GoTo Previous', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.GoTo&quot;,&quot;params&quot;:{ &quot;playerid&quot;:1,&quot;to&quot;:&quot;previous&quot;},&quot;id&quot;:1}'),
+        array('Input.executeaction PageDown', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;input.executeaction&quot;,&quot;params&quot;:{&quot;action&quot;:&quot;pagedown&quot;},&quot;id&quot;:1}'),
+        array('Input.executeaction PageUp', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;input.executeaction&quot;,&quot;params&quot;:{&quot;action&quot;:&quot;pageup&quot;},&quot;id&quot;:1}'),
+        array('Application.SetVolume VolumeUp', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetVolume&quot;,&quot;params&quot;:{&quot;volume&quot;:&quot;increment&quot;},&quot;id&quot;:1 }'),
+        array('Application.SetVolume VolumeDown', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetVolume&quot;,&quot;params&quot;:{&quot;volume&quot;:&quot;decrement&quot;},&quot;id&quot;:1 }'),
+        array('Application.Quit', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.Quit&quot;,&quot;id&quot;:1}'),
+        array('Application.SetMute Toggle', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;id&quot;:1}'),
+        array('Application.SetMute Mute', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;params&quot;:{&quot;mute&quot;:true},&quot;id&quot;:1}'),
+        array('Application.SetMute Unmute', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;params&quot;:{&quot;mute&quot;:false},&quot;id&quot;:1}'),
+    ) as $c) {
+        // $c[1] traegt die Maskierung des Originals (&quot;) bereits in sich.
+        $o .= "\t" . '<VirtualOutCmd Title="' . htmlspecialchars($c[0], ENT_QUOTES | ENT_XML1, 'UTF-8') . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . $c[1] . '" ';
+        $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
+        $o .= 'Analog="false" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualOut>' . $crlf;
+    return array('VQ_kodi_steuern.xml', $o);
+}
+
 /* ---------------- Eingaben verarbeiten ---------------- */
 
 $ko_saved = false; $ko_err = ''; $ko_note = ''; $ko_raw = '';
@@ -283,7 +363,7 @@ $ko_saved = false; $ko_err = ''; $ko_note = ''; $ko_raw = '';
    Reiterleiste, den Bereich (sm-pane mit gleicher id) und diese
    Positivliste. Fehlt der Name hier, springt die Seite nach jedem Absenden
    zurueck auf Einstellungen. */
-$ko_muster = '/^tab-(settings|loxone|test|log)$/';
+$ko_muster = '/^tab-(settings|mqtt|loxone|test|log)$/';
 $ko_tab = preg_match($ko_muster, (string) (isset($_POST['activetab']) ? $_POST['activetab'] : ''))
     ? (string) $_POST['activetab'] : 'tab-settings';
 // Die Reiter sind echte Verweise. Wer sie anklickt oder ein Lesezeichen
@@ -298,13 +378,40 @@ if (isset($_GET['form'])) {
 /** Klasse fuer den gerade sichtbaren Reiter bzw. Bereich. */
 function ko_aktiv($id) { global $ko_tab; return $ko_tab === $id ? ' sm-active' : ''; }
 
+// ---------- Loxone-Vorlage herunterladen (Hausstandard) ----------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage']) && function_exists('ko_vorlage')) {
+    list($ko_vname, $ko_vinhalt) = ($_POST['vorlage'] === 'vo' && function_exists('ko_vorlage_vo'))
+        ? ko_vorlage_vo() : ko_vorlage();
+    header('Content-Type: application/x-download');
+    header('Content-Disposition: attachment; filename="' . $ko_vname . '"');
+    echo $ko_vinhalt;
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    // MQTT speichern (eigener Reiter seit 1.1.6, Hausstandard)
+    if (isset($_POST['mqtt_save'])) {
+        $ko_cfg = ko_config();
+        $ko_cfg['mqtt_topic'] = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
+        if ($ko_cfg['mqtt_topic'] === '') { $ko_cfg['mqtt_topic'] = 'kodi'; }
+        @mkdir($ko_cfgdir, 0775, true);
+        @file_put_contents($ko_cfgfile, json_encode($ko_cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        @chmod($ko_cfgfile, 0600);
+        $ko_saved = true;
+        $ko_tab = 'tab-mqtt';
+    }
 
     if (isset($_POST['save'])) {
         $ko_cfg = ko_config();
         /* Eingaben nie hart filtern - nur Steuerzeichen und Leerraum weg (Hausstandard) */
-        $ko_cfg['mqtt_topic'] = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['mqtt_topic']));
-        if ($ko_cfg['mqtt_topic'] === '') { $ko_cfg['mqtt_topic'] = 'kodi'; }
+        // Das MQTT-Thema wohnt seit 1.1.6 im eigenen Reiter - hier nur
+        // anfassen, wenn das Feld wirklich mitkommt, sonst setzte jedes
+        // Speichern der Einstellungen das Thema auf die Vorgabe zurueck.
+        if (isset($_POST['mqtt_topic'])) {
+            $ko_cfg['mqtt_topic'] = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['mqtt_topic']));
+            if ($ko_cfg['mqtt_topic'] === '') { $ko_cfg['mqtt_topic'] = 'kodi'; }
+        }
         $ko_cfg['kodi_host'] = trim(preg_replace('/[\x00-\x1F\x7F"\'\s]/', '', (string) $_POST['kodi_host']));
         $ko_cfg['kodi_port'] = (int) $_POST['kodi_port'];
         if ($ko_cfg['kodi_port'] < 1 || $ko_cfg['kodi_port'] > 65535) { $ko_cfg['kodi_port'] = 8080; }
@@ -408,6 +515,8 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 .sm-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
 .sm-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
 .sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
+.sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
+    padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
 .sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
   display: inline-block; text-decoration: none !important; text-shadow: none !important; }
@@ -475,6 +584,7 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 
 <div class="sm-tabs">
     <a class="sm-tab<?= ko_aktiv('tab-settings') ?>" data-pane="tab-settings" href="index.php?form=settings"><?= ko_t('REITER.EINSTELLUNGEN') ?></a>
+    <a class="sm-tab<?= ko_aktiv('tab-mqtt') ?>" data-pane="tab-mqtt" href="index.php?form=mqtt"><?= ko_t('REITER.MQTT') ?></a>
     <a class="sm-tab<?= ko_aktiv('tab-loxone') ?>" data-pane="tab-loxone" href="index.php?form=loxone"><?= ko_t('REITER.LOXONE') ?></a>
     <a class="sm-tab<?= ko_aktiv('tab-test') ?>" data-pane="tab-test" href="index.php?form=test"><?= ko_t('REITER.TEST') ?></a>
     <a class="sm-tab<?= ko_aktiv('tab-log') ?>" data-pane="tab-log" href="index.php?form=log"><?= ko_t('REITER.LOG') ?></a>
@@ -503,12 +613,6 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
     <?= ko_t('TEXT.L_AUTOSTART') ?>
 </label>
 
-<h2>MQTT</h2>
-<?php if (!function_exists('ko_hs_autostart')) { function ko_hs_autostart() { $h = getenv('LBHOMEDIR') ?: '/opt/loxberry'; $g = $h . '/config/system/general.json'; if (!is_file($g)) { return null; } $j = json_decode((string) @file_get_contents($g), true); if (!is_array($j) || !isset($j['Mqtt'])) { return null; } return !empty($j['Mqtt']['Gatewayautostart']); } } if (ko_hs_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo ko_t('TEXT.W_AUTOSTART'); ?></div><?php } ?>
-<label><?= ko_t('TEXT.L_THEMA') ?></label>
-<input data-role="none" type="text" name="mqtt_topic" value="<?= ko_e($ko_cfg['mqtt_topic']) ?>">
-<div class="sm-small"><?= str_replace('%s', '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/dienst</span>', ko_t('TEXT.H_THEMA')) ?></div>
-
 <h2><?= ko_t('TEXT.H_LIZENZ') ?></h2>
 <div class="sm-alert sm-info">
 <?= str_replace('%s', '<span class="sm-mono">' . ko_e(isset($ko_st['piserial']) ? $ko_st['piserial'] : '?') . '</span>', ko_t('TEXT.LIZENZ_HINWEIS')) ?>
@@ -529,6 +633,21 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 </div>
 
 <!-- ================= Einbindung in Loxone ================= -->
+<!-- ================= MQTT (eigener Reiter seit 1.1.6, Hausstandard) ================= -->
+<div class="sm-pane<?= ko_aktiv('tab-mqtt') ?>" id="tab-mqtt">
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="mqtt_save" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<h2>MQTT</h2>
+<?php if (!function_exists('ko_hs_autostart')) { function ko_hs_autostart() { $h = getenv('LBHOMEDIR') ?: '/opt/loxberry'; $g = $h . '/config/system/general.json'; if (!is_file($g)) { return null; } $j = json_decode((string) @file_get_contents($g), true); if (!is_array($j) || !isset($j['Mqtt'])) { return null; } return !empty($j['Mqtt']['Gatewayautostart']); } } if (ko_hs_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo ko_t('TEXT.W_AUTOSTART'); ?></div><?php } ?>
+<label><?= ko_t('TEXT.L_THEMA') ?></label>
+<input data-role="none" type="text" name="mqtt_topic" value="<?= ko_e($ko_cfg['mqtt_topic']) ?>">
+<div class="sm-small"><?= str_replace('%s', '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/dienst</span>', ko_t('TEXT.H_THEMA')) ?></div>
+
+<div style="margin-top:14px;"><button data-role="none" class="sm-btn" type="submit"><?= ko_t('ALLG.SPEICHERN') ?></button></div>
+</form>
+</div>
+
 <div class="sm-pane<?= ko_aktiv('tab-loxone') ?>" id="tab-loxone">
 
 <h2><?= ko_t('TEXT.H_LOXONE') ?></h2>
@@ -549,6 +668,19 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 <tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/titel</td><td><?= ko_t('TEXT.T_TITEL') ?></td><td><?= ko_t('TEXT.V_TITEL') ?></td></tr>
 </table>
 <div class="sm-small"><?= ko_t('TEXT.THEMEN_HINWEIS') ?></div>
+
+<h2><?= ko_t('TEXT.H_VORLAGE') ?></h2>
+<div class="sm-hinweis"><?= ko_t('TEXT.H_VORLAGE_TEXT') ?> <?= ko_t('TEXT.H_VORLAGE_TEXT2') ?></div>
+<div class="sm-knopfreihe" style="margin-bottom:14px;">
+<form action="index.php" method="post" style="margin:0;">
+  <input data-role="none" type="hidden" name="vorlage" value="1">
+  <button data-role="none" class="sm-btn" type="submit" style="background:#546e7a;"><?= ko_t('TEXT.K_VORLAGE') ?></button>
+</form>
+<form action="index.php" method="post" style="margin:0;">
+  <input data-role="none" type="hidden" name="vorlage" value="vo">
+  <button data-role="none" class="sm-btn" type="submit" style="background:#546e7a;"><?= ko_t('TEXT.K_VORLAGE_VO') ?></button>
+</form>
+</div>
 
 <h2><?= ko_t('TEXT.H_STEUERN') ?></h2>
 <div class="sm-small"><?= ko_t('TEXT.STEUERN_TEXT') ?></div>
