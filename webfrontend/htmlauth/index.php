@@ -504,6 +504,7 @@ $ko_host = ko_e(isset($_SERVER['HTTP_HOST']) ? preg_replace('/:\d+$/', '', $_SER
 </label>
 
 <h2>MQTT</h2>
+<?php if (!function_exists('ko_hs_autostart')) { function ko_hs_autostart() { $h = getenv('LBHOMEDIR') ?: '/opt/loxberry'; $g = $h . '/config/system/general.json'; if (!is_file($g)) { return null; } $j = json_decode((string) @file_get_contents($g), true); if (!is_array($j) || !isset($j['Mqtt'])) { return null; } return !empty($j['Mqtt']['Gatewayautostart']); } } if (ko_hs_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo ko_t('TEXT.W_AUTOSTART'); ?></div><?php } ?>
 <label><?= ko_t('TEXT.L_THEMA') ?></label>
 <input data-role="none" type="text" name="mqtt_topic" value="<?= ko_e($ko_cfg['mqtt_topic']) ?>">
 <div class="sm-small"><?= str_replace('%s', '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/dienst</span>', ko_t('TEXT.H_THEMA')) ?></div>
