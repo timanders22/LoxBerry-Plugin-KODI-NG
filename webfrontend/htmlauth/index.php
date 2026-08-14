@@ -108,6 +108,14 @@ function ko_config() {
 function ko_log($text) {
     global $ko_logfile;
     @mkdir(dirname($ko_logfile), 0775, true);
+    /* Kappung nach dem Hausmuster (fer_log, FerienFeiertage): ab 500 kB
+     * bleiben die letzten 200 Zeilen stehen. Ohne sie waechst die Datei
+     * unbegrenzt - auf einem LoxBerry mit SD-Karte ist das kein
+     * Schoenheitsfehler. */
+    if (is_file($ko_logfile) && filesize($ko_logfile) > 512000) {
+        $rest = array_slice(file($ko_logfile, FILE_IGNORE_NEW_LINES) ?: array(), -200);
+        @file_put_contents($ko_logfile, implode("\n", $rest) . "\n");
+    }
     @file_put_contents($ko_logfile, '[' . date('Y-m-d H:i:s') . '] ' . $text . "\n", FILE_APPEND);
 }
 
