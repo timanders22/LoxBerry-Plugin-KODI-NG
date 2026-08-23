@@ -4,10 +4,13 @@
 ARGV1=$1
 ARGV3=$3
 ARGV5=$5
+# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
+# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
+LBHOMEDIR="${LBHOMEDIR:-$5}"
 
 BASE="${ARGV5:-$LBHOMEDIR}"
 PDIR="${ARGV3:-kodi}"
-SICHER="$BASE/data/plugins/$PDIR/upgrade_sicherung"
+SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 
 mkdir -p "$BASE/config/plugins/$PDIR" 2>/dev/null
 
@@ -26,7 +29,7 @@ fi
 
 chown -R loxberry:loxberry "$BASE/config/plugins/$PDIR" 2>/dev/null
 
-rm -rf "$BASE/data/plugins/$PDIR/upgrade_sicherung" 2>/dev/null
+rm -rf "$BASE/data/plugins/$PDIR.upgrade_sicherung" 2>/dev/null
 rm -rf "/tmp/${ARGV1}_upgrade" 2>/dev/null
 
 echo "<OK> Update abgeschlossen."

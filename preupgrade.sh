@@ -6,6 +6,9 @@
 ARGV1=$1   # Temporaerer Ordner waehrend der Installation
 ARGV3=$3   # Installationsordner des Plugins
 ARGV5=$5   # Wurzelverzeichnis des LoxBerry
+# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
+# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
+LBHOMEDIR="${LBHOMEDIR:-$5}"
 
 BASE="${ARGV5:-$LBHOMEDIR}"
 PDIR="${ARGV3:-kodi}"
@@ -21,7 +24,16 @@ PDIR="${ARGV3:-kodi}"
 # dem LoxBerry eine Ramdisk. Dieses Plugin setzt REBOOT=true - zwischen
 # preupgrade und postupgrade kann also planmaessig ein Neustart liegen, und
 # danach waere die Ramdisk leer. Bestand hat nur, was auf der Karte liegt.
-SICHER="$BASE/data/plugins/$PDIR/upgrade_sicherung"
+# Die Sicherung liegt NEBEN dem Ordner, nicht darin. Gemessen an
+# sbin/plugininstall.pl (Zweig master, 23.08.2026): der Installer ruft
+# &purge_installation nicht nur beim Deinstallieren, sondern auch im
+# Upgrade-Zweig (:886), und deren Rumpf loescht ohne jede Bedingung
+# (:1629 ff.) config/plugins/<x>/, bin/plugins/<x>/, data/plugins/<x>/,
+# templates/plugins/<x>/ und beide webfrontend/-Ordner. Eine Sicherung IN
+# data/plugins/<x>/ wird also von genau dem Schritt vernichtet, den sie
+# ueberdauern soll. Der Punkt im Namen ist der ganze Unterschied:
+# "rm -rf .../<x>/" trifft den Nachbarn "<x>.upgrade_sicherung" nicht.
+SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 
 echo "<INFO> Sichere die Konfiguration nach $SICHER"
 rm -rf "$SICHER" 2>/dev/null
