@@ -21,7 +21,7 @@
 "
 "Last-Translator: Kodi NG LoxBerry Plugin Authors
 "
-"Language-Team: English
+"Language-Team: English (United Kingdom)
 "
 "MIME-Version: 1.0
 "
@@ -29,7 +29,7 @@
 "
 "Content-Transfer-Encoding: 8bit
 "
-"Language: en
+"Language: en_gb
 "
 "Plural-Forms: nplurals=2; plural=(n != 1);
 "

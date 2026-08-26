@@ -9,3 +9,20 @@ v1.1
 
 v1.2
 - send "movie_title=%s"
+
+v3.0.0
+- Portiert auf Python 3 (Kodi 19 "Matrix" und neuer)
+- Zusaetzlich MQTT ueber das LoxBerry MQTT Gateway (UDP-Schnittstelle)
+
+v3.1.0
+- Der Titel kommt je Medienart aus der passenden Quelle. Bis dahin wurde
+  MyPlayer.title nur fuer Filme gesetzt; bei Musik und Serien ging der Titel
+  des zuletzt gespielten Films unter music_title bzw. episode_title hinaus.
+- Beim Stoppen wird der Titel geraeumt. Sonst stand er retained im Broker
+  weiter, und "was laeuft gerade" sah auch dann nach Wiedergabe aus, wenn
+  nichts mehr lief.
+- Ein leerer Wert geht als "-" hinaus, nicht als leere Nutzlast mit
+  abschliessendem Leerzeichen.
+- Die Liste THEMEN steht ausgeschrieben im Quelltext, damit die Pruefzeile
+  im Reiter Test des Plugins sie gegen ihre eigene Tabelle halten kann.
+

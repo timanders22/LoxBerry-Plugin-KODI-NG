@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Kodi NG - Statussender, jede Minute angestossen.
+#
+# DIES IST EINE DATEI, KEIN VERZEICHNIS. Der Installer nimmt cron/cron.01min
+# als das zu installierende Ding und legt es unter
+# system/cron/cron.01min/<plugin> ab. Bei einer Datei ist das der Cron-Eintrag,
+# bei einem Verzeichnis ein Unterverzeichnis - und LoxBerry fuehrt in diesen
+# Ordnern nur Dateien aus. Der Cron liefe nie, ohne ein Wort zu sagen.
+#
+# WARUM cron.01min UND NICHT cron.05min: gezaehlt ueber den Bestand dieses
+# Hauses fuehren 32 Linien cron.01min, 7 fuehren cron.05min, eine cron.10min.
+# Ein Takt, den sonst kaum jemand benutzt, ist ein Takt, dessen Funktionieren
+# niemand je gezeigt hat. Der tatsaechliche Abstand zwischen zwei Sendungen
+# steht in der Konfiguration (sender_takt, Vorgabe 300 s) und nicht im
+# Ordnernamen - der Lauf selbst entscheidet, ob er etwas tut.
+#
+# KEINE RECHNUNG MIT ".." VOM EIGENEN ABLAGEORT. LoxBerry legt diese Datei
+# unter <Wurzel>/system/cron/cron.01min/<plugin> ab, also drei Ebenen unter
+# der Wurzel; eine feste Zahl Ebenen aufwaerts landet daneben. Der Installer
+# ersetzt die Platzhalter beim Einbau - sie stehen deshalb NUR in den beiden
+# Zuweisungen und nicht hier im Kommentar, sonst stuende danach in dieser
+# Datei ein fest verdrahteter Systempfad.
+
+SKRIPT="REPLACELBPBINDIR/kodi_ng_status.php"
+CFG="REPLACELBPCONFIGDIR/kodi.json"
+
+# Ist der Sender ausgeschaltet, braucht es gar keinen PHP-Prozess.
+#
+# Die Gegenprobe steckt in der Richtung des Vergleichs: gesucht wird die
+# ABSCHALTUNG. Fehlt der Schluessel - etwa in einer Konfiguration, die noch
+# aus 1.1.9 stammt -, findet grep nichts, und der Lauf geht weiter zum
+# Skript, das die Frage richtig beantwortet. Ein Muster, das versehentlich
+# nirgends passt, haelt hier also nichts an.
+if [ -f "$CFG" ] && grep -q '"sender_ein"[[:space:]]*:[[:space:]]*"0"' "$CFG"; then
+    exit 0
+fi
+
+# Fail loud statt still. Ein Cron-Eintrag, der schweigend nichts tut, ist
+# schlimmer als keiner - genau so ist der Hintergrunddienst einer anderen
+# Linie acht Fassungen lang unbemerkt ausgefallen.
+if [ ! -f "$SKRIPT" ]; then
+    MELDUNG="Kodi NG: der Statussender wurde nicht gefunden - es wird nichts gesendet."
+    command -v logger >/dev/null 2>&1 && logger -t kodi_ng "$MELDUNG"
+    echo "$MELDUNG" >&2
+    exit 1
+fi
+
+PHP=$(command -v php 2>/dev/null)
+if [ -z "$PHP" ]; then
+    MELDUNG="Kodi NG: php wurde nicht gefunden - der Statussender laeuft nicht."
+    command -v logger >/dev/null 2>&1 && logger -t kodi_ng "$MELDUNG"
+    echo "$MELDUNG" >&2
+    exit 1
+fi
+
+# Die Ausgabe wird NICHT nach /dev/null geleitet. Im Normalfall schweigt das
+# Skript; was es sagt, ist eine Stoerung und gehoert in den Systemlogger.
+exec "$PHP" "$SKRIPT"

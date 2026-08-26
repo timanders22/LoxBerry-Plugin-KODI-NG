@@ -46,13 +46,72 @@ echo "<INFO>   sudo userdel -r kodi"
 echo "<INFO> Kodi selbst bleibt installiert: sudo apt purge kodi"
 
 
-# ---------- Den Nachbarn der Sicherung wegraeumen ----------
-# data/plugins/<ordner>.upgrade_sicherung liegt AUSSERHALB des Ordners, den
-# LoxBerry beim Deinstallieren loescht - genau deshalb uebersteht er ein
-# Update. Wer ihn hier nicht abraeumt, laesst Zugangsdaten liegen.
-UN_FOLDER="${3:-}"
+# ---------- Alles wegraeumen, was NEBEN dem Pluginordner liegt ----------
+#
+# plugininstall.pl entfernt beim Deinstallieren config/plugins/<ordner>/,
+# bin/plugins/<ordner>/, data/plugins/<ordner>/ und die beiden
+# webfrontend-Ordner. Was eine Ebene DARUEBER liegt, bleibt - genau deshalb
+# uebersteht es ein Update, und genau deshalb muss es hier weg.
+#
+# Bis 1.1.9 wurde nur die Upgrade-Sicherung abgeraeumt. Die Zweitschrift
+# config/plugins/<ordner>.backup.json blieb dagegen unbegrenzt liegen, und
+# eine spaetere NEUinstallation holte daraus stillschweigend die alte
+# Konfiguration zurueck - samt Kodi-Passwort. Eine saubere Neuinstallation
+# war das nicht.
+# Der Rueckfall auf den eigenen Ordnernamen. preupgrade.sh und
+# postupgrade.sh haben ihn seit jeher, dieses Skript hatte ihn nicht - und
+# ohne ihn blieb bei fehlenden Argumenten alles liegen, waehrend die
+# Schlusszeile "Alles entfernt" meldete.
+UN_FOLDER="${3:-kodi_ng}"
 UN_BASE="${5:-$LBHOMEDIR}"
-if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -d "$UN_BASE/data/plugins" ]; then
-    rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+if [ -z "$UN_BASE" ] && [ -d /opt/loxberry/config/plugins ]; then
+    UN_BASE=/opt/loxberry
+fi
+if [ -z "$UN_BASE" ]; then
+    echo "<WARNING> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln."
+    echo "<WARNING> Diese Dateien bleiben deshalb LIEGEN und muessen von Hand weg:"
+    echo "<WARNING>   <LoxBerry>/config/plugins/$UN_FOLDER.backup.json"
+    echo "<WARNING>   <LoxBerry>/data/plugins/$UN_FOLDER.upgrade_sicherung"
+    echo "<WARNING>   <LoxBerry>/system/cron/cron.*/$UN_FOLDER"
+    echo "<WARNING> In der ersten steht das Kodi-Passwort im Klartext."
+fi
+if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ]; then
+    if [ -d "$UN_BASE/data/plugins" ]; then
+        rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+    fi
+    if [ -d "$UN_BASE/config/plugins" ]; then
+        rm -f "$UN_BASE/config/plugins/$UN_FOLDER.backup.json" 2>/dev/null
+    fi
+    # Der eigene Cron-Eintrag. Er liegt unter system/cron/ und damit
+    # ausserhalb aller Plugin-Baeume; bliebe er stehen, riefe der Cron eine
+    # Datei auf, die es nicht mehr gibt - und schriebe das jede Minute in den
+    # Systemlogger. Entfernt wird nur der Eintrag mit DIESEM Ordnernamen.
+    for K in "$UN_BASE"/system/cron/cron.*/"$UN_FOLDER"; do
+        [ -e "$K" ] && rm -rf "$K" 2>/dev/null
+    done
+fi
+
+# Nachzaehlen statt behaupten. Ein Deinstallationsskript, das meldet, es habe
+# aufgeraeumt, und dabei etwas stehenlaesst, ist schlimmer als keines.
+UN_REST=0
+for K in "/etc/systemd/system/kodi_ng.service" \
+         "/etc/udev/rules.d/99-kodi_ng.rules" \
+         "/etc/udev/rules.d/10-kodi_ng-permissions.rules" \
+         "$UN_BASE/config/plugins/$UN_FOLDER.backup.json" \
+         "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung"; do
+    if [ -e "$K" ]; then
+        echo "<WARNING> Liegt noch da und liess sich nicht entfernen: $K"
+        UN_REST=$((UN_REST + 1))
+    fi
+done
+if [ -z "$UN_BASE" ]; then
+    # Ohne Wurzelverzeichnis hat die Schleife oben leere Pfade geprueft und
+    # nichts gefunden - das ist kein Nachweis, sondern ein blinder Fleck. Wer
+    # hier "alles entfernt" meldete, saehe genauso aus wie ein gelungener
+    # Lauf, und die Datei mit dem Kodi-Passwort bliebe unbemerkt liegen.
+    echo "<WARNING> Ob ausserhalb der Plugin-Ordner noch etwas liegt, konnte"
+    echo "<WARNING> nicht geprueft werden - siehe die Liste oben."
+elif [ "$UN_REST" -eq 0 ]; then
+    echo "<OK> Alles entfernt, was dieses Plugin ausserhalb seiner Ordner angelegt hat."
 fi
 exit 0

@@ -21,7 +21,7 @@
 "
 "Last-Translator: Kodi NG LoxBerry Plugin Authors
 "
-"Language-Team: English
+"Language-Team: German (Germany)
 "
 "MIME-Version: 1.0
 "
@@ -29,7 +29,7 @@
 "
 "Content-Transfer-Encoding: 8bit
 "
-"Language: en
+"Language: de_de
 "
 "Plural-Forms: nplurals=2; plural=(n != 1);
 "
@@ -39,36 +39,36 @@ msgstr ""
 
 msgctxt "#32000"
 msgid "send status to:"
-msgstr ""
+msgstr "Zustand senden an:"
 
 msgctxt "#32001"
 msgid "UDP Address:"
-msgstr ""
+msgstr "UDP-Adresse (Miniserver):"
 
 msgctxt "#32002"
 msgid "UDP Port:"
-msgstr ""
+msgstr "UDP-Port (Miniserver):"
 
 msgctxt "#32003"
 msgid "Volume on Kodi start:"
-msgstr ""
+msgstr "Lautstärke beim Start von Kodi:"
 
 msgctxt "#32010"
 msgid "MQTT (LoxBerry MQTT Gateway)"
-msgstr ""
+msgstr "MQTT (LoxBerry MQTT Gateway)"
 
 msgctxt "#32011"
 msgid "Send events via MQTT"
-msgstr ""
+msgstr "Ereignisse über MQTT senden"
 
 msgctxt "#32012"
 msgid "LoxBerry IP address:"
-msgstr ""
+msgstr "IP-Adresse des LoxBerry:"
 
 msgctxt "#32013"
 msgid "MQTT Gateway UDP port:"
-msgstr ""
+msgstr "UDP-Port des MQTT-Gateways:"
 
 msgctxt "#32014"
 msgid "MQTT base topic:"
-msgstr ""
+msgstr "MQTT-Basisthema:"

@@ -108,8 +108,14 @@ if [ -f "$CONFIGTXT" ]; then
             echo "<INFO> $PIMODEL erkannt - gpu_mem wird nicht gesetzt (nicht noetig)."
             ;;
         *)
+            # Die config.txt von bookworm ist in bedingte Abschnitte geteilt
+            # ([pi4], [cm4], [all] ...). Eine Zeile blank ans Dateiende zu
+            # haengen legt sie in den ZULETZT geoeffneten Abschnitt - sie gilt
+            # dann nur unter dessen Bedingung. Deshalb wird beim Anhaengen ein
+            # ausdrueckliches [all] mitgeschrieben; steht es doppelt, ist die
+            # zweite Zeile wirkungslos.
             echo "<INFO> Setting GPU memory to 192MB in $CONFIGTXT"
-            awk -v s="gpu_mem=192" '/^gpu_mem=/{$0=s;f=1} {a[++n]=$0} END{if(!f)a[++n]=s;for(i=1;i<=n;i++)print a[i]>ARGV[1]}' "$CONFIGTXT"
+            awk -v s="gpu_mem=192" '/^gpu_mem=/{$0=s;f=1} {a[++n]=$0} END{if(!f){a[++n]="[all]";a[++n]=s};for(i=1;i<=n;i++)print a[i]>ARGV[1]}' "$CONFIGTXT"
             ;;
     esac
 else

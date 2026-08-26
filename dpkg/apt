@@ -13,4 +13,15 @@
 # Das Paket zu installieren wuerde ausserdem nichts nuetzen: Addons laufen
 # im eingebauten Python von Kodi, und das sieht die Systempakete von
 # Debian nicht zwangslaeufig.
+#
+# EBENFALLS BEWUSST NICHT EINGETRAGEN: php-sockets.
+#
+# Bis 1.1.9 benutzte die Oberflaeche socket_create() und socket_sendto(), um
+# an das UDP-Relay des Gateways zu senden - ohne dass das Paket hier stand.
+# Fehlt die Erweiterung, ist das KEIN abfangbarer Fehler, sondern ein fataler
+# ("Call to undefined function"); das vorangestellte @-Zeichen haette daran
+# nichts geaendert. Seit 1.2.0 laeuft derselbe Weg ueber
+# stream_socket_client(), und das gehoert zum PHP-Kern. Das Paket wird also
+# nicht gebraucht - und ein Plugin, das eine Erweiterung nachinstalliert, die
+# es gar nicht benutzt, waere nur eine weitere Wette.
 kodi

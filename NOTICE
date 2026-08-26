@@ -86,6 +86,44 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        Ordnername kommt in keiner Loxone-Adresse vor.
 
 
+1.2.0  Statussender: bis 1.1.9 hatte dieses Plugin keinen Cron, keinen Dienst
+       und keinen Endpunkt. Die Themen dienst, autostart und zeitstempel
+       wurden nur veroeffentlicht, wenn jemand im Reiter Test einen Knopf
+       drueckte - die virtuellen Eingaenge der mitgelieferten Loxone-Vorlage
+       blieben im Betrieb also leer. Neu: bin/kodi_ng_status.php ueber
+       cron/cron.01min, ab Werk ausgeschaltet.
+
+       Themenliste: die Tabelle im Reiter "Einbindung in Loxone" nannte zwei
+       Themen, die es nicht gab (status, titel), waehrend die fuenf, die das
+       Callback-Addon wirklich sendet, fehlten. Beide Seiten stehen jetzt
+       ausgeschrieben, und eine Zeile der Selbstpruefung haelt sie
+       gegeneinander.
+
+       Sichern und Zurueckspielen der Einstellungen ueber zwei Knoepfe -
+       einschliesslich Autostart, der Addon-Felder und der Codec-Lizenzen
+       (letztere geraetegebunden und nur auf ausdruecklichen Wunsch).
+
+       Die Fassung des MQTT-Gateways (Mqtt.Gatewayversion) wird gelesen; der
+       Satz "Ohne diesen Eintrag kommt am Miniserver nichts an" gilt nur fuer
+       V1 und steht seither in genau einem Sprachschluessel.
+
+       Formularmerkmal gegen fremde Absender an allen Formularen, ein
+       Wachposten vor allen Handlern, sechzehn Zeilen Selbstpruefung im
+       Reiter Test.
+
+       socket_create() ersetzt durch stream_socket_client(): die
+       Socket-Erweiterung stand nicht in dpkg/apt, und ihr Fehlen ist kein
+       abfangbarer Fehler, sondern ein fataler.
+
+       Entfallen: data/VO_Kodi_V1.xml (zweiter Stand desselben Inhalts,
+       gegenueber dem Erzeuger veraltet), bin/kodi-rpc.conf (bevorzugt vor
+       jeder anderen Angabe und mit festen Werten belegt), die tote
+       Hilfe-Zweitfassung templates/help/kodi_main.html samt ihren beiden
+       Sprachdateien.
+
+       Das Kodi-Addon traegt jetzt Fassung 3.1.0 (Titel je Medienart, Raeumen
+       beim Stoppen, ausgeschriebene Themenliste).
+
 Marken
 ------
 Kodi ist eine Marke der XBMC Foundation. Dieses Plugin steht in keiner

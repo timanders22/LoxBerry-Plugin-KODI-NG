@@ -11,7 +11,10 @@ ARGV5=$5   # Wurzelverzeichnis des LoxBerry
 LBHOMEDIR="${LBHOMEDIR:-$5}"
 
 BASE="${ARGV5:-$LBHOMEDIR}"
-PDIR="${ARGV3:-kodi}"
+# Der Rueckfall hiess bis 1.1.9 "kodi" - der Ordnername VOR der
+# Umbenennung auf kodi_ng. Griff er, sicherte bzw. suchte dieses
+# Skript in einem Verzeichnis, das es nicht mehr gibt.
+PDIR="${ARGV3:-kodi_ng}"
 
 # Geschweifte Klammern statt Rueckstrich.
 #
