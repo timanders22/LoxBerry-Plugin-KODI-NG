@@ -359,6 +359,26 @@ function ko_pruefungen(array $reiter, $indexdatei)
                 '<span class="sm-mono">' . ko_e($kp['exec']) . '</span>'));
     }
 
+    /* --- Kodis eigene Fernsteuerung. Sie ist die Voraussetzung fuer die
+     *     Weboberflaeche UND fuer JSON-RPC; das Plugin schaltet sie beim
+     *     Einspielen selbst ein. Bis 1.2.1 fragte niemand nach, ob das noch
+     *     gilt - und ein Anwender, der eine leere Seite sah, hatte keine
+     *     Stelle, an der stand, ob ueberhaupt jemand horcht. */
+    $adv = ko_adv_lesen();
+    if ($adv === null) {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_FERN'), ko_t('TEST.A_DIENST_UNBEKANNT'));
+    } elseif (!$adv['vorhanden']) {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_FERN'), ko_t('TEST.A_FERN_KEINE_DATEI'));
+    } elseif ($adv['webserver'] === 'true') {
+        $z[] = ko_pruefzeile(1, ko_t('TEST.F_FERN'),
+            sprintf(ko_t('TEST.A_FERN_AN'), '<span class="sm-mono">'
+                . ko_e($adv['port'] !== '' ? $adv['port'] : '8080') . '</span>'));
+    } else {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_FERN'),
+            sprintf(ko_t('TEST.A_FERN_AUS'),
+                '<span class="sm-mono">' . ko_e($adv['datei']) . '</span>'));
+    }
+
     /* --- Der Kodi-Dienst. */
     if (!$st) {
         $z[] = ko_pruefzeile(-1, ko_t('TEST.F_DIENST'), ko_t('TEST.A_DIENST_UNBEKANNT'));

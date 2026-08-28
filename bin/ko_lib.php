@@ -657,6 +657,39 @@ if (!function_exists('ko_kodi_paket')) {
 }
 
 /**
+ * Steht Kodis eigene Fernsteuerung an?
+ *
+ * Das Plugin schaltet sie beim Einspielen selbst ein - postroot.sh legt
+ * /home/kodi/.kodi/userdata/advancedsettings.xml an, und darin steht
+ * <webserver>true</webserver>. Ohne das antwortet weder die Weboberflaeche
+ * noch JSON-RPC, und beide Knoepfe des Plugins fuehrten ins Leere, ohne dass
+ * irgendwo staende warum.
+ *
+ * Rueckgabe null = der Helfer schweigt (dann wird ein Strich gemeldet, kein
+ * Kreuz). Sonst ein Feld mit 'vorhanden', 'webserver' und 'port'.
+ */
+if (!function_exists('ko_adv_lesen')) {
+    function ko_adv_lesen()
+    {
+        static $a = null;
+        static $gelesen = false;
+        if ($gelesen) { return $a; }
+        $gelesen = true;
+        $j = ko_helper_json('action=advread');
+        if (!is_array($j) || !isset($j['status']) || $j['status'] !== 'OK') {
+            return $a;
+        }
+        $a = array(
+            'vorhanden' => !empty($j['vorhanden']),
+            'webserver' => isset($j['webserver']) ? (string) $j['webserver'] : '',
+            'port'      => isset($j['port']) ? (string) $j['port'] : '',
+            'datei'     => isset($j['datei']) ? (string) $j['datei'] : '',
+        );
+        return $a;
+    }
+}
+
+/**
  * Der Wirtsname, unter dem der ANWENDER diesen LoxBerry gerade sieht.
  *
  * Aus der laufenden Anfrage, ohne Port. Sie ist die einzige Adresse, von der

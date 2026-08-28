@@ -1,12 +1,74 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.2 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.3 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.3 – „Aber wie komme ich zu Kodi?"
+
+Die Nachfrage auf die Antwort oben — und sie zeigt, dass die Antwort nur halb
+war. „Stellen Sie das in Kodi ein" hilft niemandem, der nicht weiß, wo Kodi
+überhaupt ist.
+
+**Kodi läuft auf dem Bildschirm am LoxBerry.** Der Dienst startet
+`kodi-standalone` auf der Konsole `/dev/tty7` mit `PAMName=login`; die Ausgabe
+geht auf den HDMI-Ausgang. Kodis Oberfläche erscheint also auf dem
+angeschlossenen Fernseher oder Monitor und wird mit einer USB-Tastatur, einer
+Fernbedienung oder über HDMI-CEC mit der Fernbedienung des Fernsehers bedient.
+Vom Handy geht *Kore* (Android) beziehungsweise *Kodi Remote* (iOS).
+**Kodis Einstellungsmenü gibt es aber nur dort** — weder eine Handy-App noch
+eine Weboberfläche im Browser kann es öffnen.
+
+**Und das Wichtigste: für dieses Plugin muss dort nichts eingestellt werden.**
+Das Plugin bringt `data/advancedsettings.xml` mit, und `postroot.sh` legt sie
+unter `/home/kodi/.kodi/userdata/` ab — darin steht `<webserver>true</webserver>`,
+`<esallinterfaces>true</esallinterfaces>` und `<zeroconf>true</zeroconf>`. Kodis
+Fernsteuerung ist damit **von Anfang an eingeschaltet**. Das Callback-Addon
+spielt das Plugin ebenfalls selbst ein, und dessen sieben Felder setzt der Knopf
+*Addon-Einstellungen setzen* im Reiter *MQTT*. An Kodis Oberfläche geht man nur
+für die eigenen **Medienquellen**.
+
+Das stand nirgends — und ob es noch gilt, fragte auch niemand nach. Deshalb:
+
+* **Neue Prüfzeile *Steht Kodis eigene Fernsteuerung an?*** — vor der
+  Dienstzeile. Sie liest `advancedsettings.xml` über den Helfer (die Datei
+  gehört `kodi` und liegt in einem Verzeichnis mit `chmod 750`, der Webbenutzer
+  kommt nicht heran) und unterscheidet vier Lagen: eingeschaltet mit genanntem
+  Port, ausgeschaltet, Datei gar nicht vorhanden, Helfer schweigt. Der neue
+  Helferbefehl `advread` liest **nur**; geschrieben wird die Datei
+  ausschließlich beim Einspielen.
+* **Zwei Hilfeabschnitte** (`K04d`, `K04e`): wie man an Kodi herankommt, und
+  was man dort für dieses Plugin einstellen muss — nämlich nichts.
+
+**Mitgegangen, eine kleine Berichtigung in `postroot.sh`:** das `cp` überschrieb
+eine vorhandene `advancedsettings.xml` **ohne Sicherungskopie**. Dort können
+Einstellungen des Anwenders stehen, die dieses Plugin nichts angehen
+(Netzwerkabstimmung, Datenbank, Zwischenspeicher) — die waren nach jedem
+Einspielen weg, ohne dass es irgendwo stand. Bei der `config.txt` legt dasselbe
+Skript seit je eine Sicherung an; hier fehlte sie. Jetzt heißt sie
+`advancedsettings.xml.kodiplugin`.
+
+**Sie wird nie überschrieben, und das ist der eigentliche Punkt.** `postroot.sh`
+läuft bei *jedem* Einspielen, nicht nur beim ersten. Beim zweiten ist die
+aktuelle Datei bereits die des Plugins — eine Sicherung ohne diese Bedingung
+kopierte sie über die Sicherung des ersten Laufs, und die Anwenderdatei wäre
+endgültig weg. Also genau der Verlust, den die Stelle verhindern soll, nur eine
+Fassung später. Dazu die Gegenbedingung: eine Datei, die mit der mitgelieferten
+übereinstimmt, wird gar nicht erst gesichert, sonst bliebe bei jeder
+Neuinstallation eine Sicherung stehen, die nichts enthält als das, was das
+Plugin selbst mitbringt. Nachgestellt mit dreimaligem Einspielen in beiden
+Lagen.
+
+Gemessen von `t_advread.pl` (die beiden Lesemuster am echten Quelltext des
+Helfers, gegen die ausgelieferte Datei und fünf Abwandlungen) und
+`ps/t_fernweg.py` (die Prüfzeile in sechs Lagen, darunter einmal der ganze Weg
+vom PHP durch `sudo` in den echten Helfer und zurück).
+
+Sonst ist 1.2.3 inhaltlich gleich 1.2.2.
 
 ## Version 1.2.2 – „Ist Kodi überhaupt installiert?"
 

@@ -124,6 +124,40 @@ fi
 
 echo "<INFO> Creating Kodi settings directory"
 mkdir -p /home/kodi/.kodi/userdata
+# Eine vorhandene Datei zuerst sichern. Sie kann Einstellungen des
+# Anwenders tragen, die dieses Plugin nichts angehen (Netzwerkabstimmung,
+# Datenbank, Zwischenspeicher) - bis 1.2.1 waren die nach jedem Einspielen
+# weg, ohne dass es irgendwo stand. Bei der config.txt macht dasselbe Skript
+# es seit je richtig; hier fehlte es.
+#
+# ZWEI BEDINGUNGEN, und beide sind noetig. Dieses Skript laeuft bei JEDEM
+# Einspielen, nicht nur beim ersten:
+#
+#   1. Eine vorhandene Sicherung wird NICHT ueberschrieben. Beim zweiten
+#      Einspielen ist die aktuelle Datei bereits die des Plugins; ohne diese
+#      Bedingung kopierte sie sich ueber die Sicherung, und die Anwenderdatei
+#      waere endgueltig weg - genau der Verlust, den diese Stelle verhindern
+#      soll, nur eine Fassung spaeter. Nachgestellt mit dreimaligem Aufruf.
+#   2. Eine Datei, die mit der mitgelieferten uebereinstimmt, wird gar nicht
+#      erst gesichert. Sonst entstuende bei der ersten Neuinstallation eine
+#      Sicherung, die nichts enthaelt als das, was das Plugin selbst
+#      mitbringt - und die dann nach 1. fuer immer stehen bliebe.
+ADVUSER=/home/kodi/.kodi/userdata/advancedsettings.xml
+ADVSICHER="$ADVUSER.kodiplugin"
+if [ ! -f "$ADVUSER" ]; then
+    :
+elif [ -f "$ADVSICHER" ]; then
+    echo "<INFO> advancedsettings.xml.kodiplugin ist bereits vorhanden und"
+    echo "<INFO> bleibt unberuehrt - sie traegt den Stand vor der ersten"
+    echo "<INFO> Installation dieses Plugins."
+elif cmp -s "$ADVUSER" data/advancedsettings.xml; then
+    echo "<INFO> Vorhandene advancedsettings.xml stimmt mit der"
+    echo "<INFO> mitgelieferten ueberein - keine Sicherung noetig."
+else
+    cp -v "$ADVUSER" "$ADVSICHER"
+    echo "<INFO> Bisherige advancedsettings.xml gesichert als"
+    echo "<INFO> advancedsettings.xml.kodiplugin"
+fi
 cp -v data/advancedsettings.xml /home/kodi/.kodi/userdata
 mkdir -p /home/kodi/.kodi/addons
 cp -v -R data/addons/. /home/kodi/.kodi/addons/

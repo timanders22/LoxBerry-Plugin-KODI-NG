@@ -174,6 +174,17 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        Mitgegangen: der alte Verweis trug kein rel="noopener noreferrer" und
        wurde auch bei unzulaessigem Port angeboten.
 
+1.2.3  Nachfrage vom 29.08.2026: "Aber wie komme ich zu Kodi?" - die Antwort
+       stand nirgends. Kodi laeuft auf dem Bildschirm am LoxBerry
+       (kodi-standalone auf /dev/tty7, HDMI); sein Einstellungsmenue gibt es
+       nur dort. Fuer dieses Plugin muss dort allerdings nichts eingestellt
+       werden: die Fernsteuerung schaltet postroot.sh selbst ein
+       (advancedsettings.xml mit webserver true). Neu sind deshalb eine
+       Pruefzeile "Steht Kodis eigene Fernsteuerung an?" samt Helferbefehl
+       advread (nur lesend) und zwei Hilfeabschnitte. Mitgegangen: postroot.sh
+       ueberschrieb eine vorhandene advancedsettings.xml ohne
+       Sicherungskopie - jetzt wird sie als .kodiplugin gesichert.
+
 Marken
 ------
 Kodi ist eine Marke der XBMC Foundation. Dieses Plugin steht in keiner

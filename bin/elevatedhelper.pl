@@ -253,6 +253,36 @@ if ($action eq "service") {
 # weiter unter dem alten sendete. Ohne jede Meldung.
 # ------------------------------------------------------------------
 
+# Kodis eigene Fernsteuerung: liegt sie an, und sagt sie noch, was das
+# Plugin bei der Installation hineingeschrieben hat?
+#
+# Die Datei gehoert kodi und liegt in einem Heimatverzeichnis mit chmod 750 -
+# der Webbenutzer kommt nicht heran, deshalb steht die Auskunft hier. NUR
+# LESEN: geschrieben wird advancedsettings.xml ausschliesslich beim
+# Einspielen des Plugins, und dabei mit Sicherungskopie.
+if ($action eq "advread") {
+	my $datei;
+	foreach my $h (@kodi_heim) {
+		my $d = "$h/.kodi/userdata/advancedsettings.xml";
+		if (-e $d) { $datei = $d; last; }
+	}
+	if (!defined $datei) {
+		print $cgi->header(-type => 'application/json;charset=utf-8', -status => "200 OK");
+		print '{"status":"OK","error":0,"vorhanden":0}';
+		exit;
+	}
+	my $inhalt = '';
+	if (open(my $fh, '<', $datei)) { local $/; $inhalt = <$fh>; close $fh; }
+	# Kein XML-Parser fuer zwei Angaben: gesucht sind genau die beiden
+	# Elemente, die der Webserver braucht.
+	my $ws = ($inhalt =~ m{<webserver>\s*([^<\s]+)\s*</webserver>}i) ? lc $1 : '';
+	my $pt = ($inhalt =~ m{<webserverport>\s*(\d{1,5})\s*</webserverport>}i) ? $1 : '';
+	print $cgi->header(-type => 'application/json;charset=utf-8', -status => "200 OK");
+	print '{"status":"OK","error":0,"vorhanden":1,"datei":"' . json_text($datei)
+		. '","webserver":"' . json_text($ws) . '","port":"' . json_text($pt) . '"}';
+	exit;
+}
+
 if ($action eq "addonread") {
 	my $datei = addon_datei();
 	if (!defined $datei) {
