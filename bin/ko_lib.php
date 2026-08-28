@@ -607,8 +607,14 @@ if (!function_exists('ko_status')) {
  * Zustand UND FASSUNG des LoxBerry-MQTT-Gateways - aus EINEM Dateizugriff.
  *
  * Bis 1.1.9 stand general.json an zwei Stellen offen: einmal fuer den
- * UDP-Port, einmal fuer den Autostart, letzteres mit einem fest verdrahteten
- * /opt/loxberry als Rueckfall.
+ * UDP-Port, einmal fuer den Autostart - und letzteres mit einem fest
+ * verdrahteten Installationsverzeichnis als Rueckfall.
+ *
+ * Der Pfad wird hier ABSICHTLICH NICHT AUSGESCHRIEBEN, auch nicht als
+ * Beispiel: der Pluginpruefer von LoxBerry liest die Dateien und sucht die
+ * Zeichenkette, ohne zwischen Code und Kommentar zu unterscheiden. Ein
+ * erklaerender Satz, der sie enthaelt, loest dieselbe Warnung aus wie der
+ * Fehler, den er beschreibt.
  *
  * Die Fassung steht als Mqtt.Gatewayversion (ab Werk 1) und entscheidet, was
  * der Anwender tun muss:

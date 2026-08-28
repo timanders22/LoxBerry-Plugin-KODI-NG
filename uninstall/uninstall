@@ -63,10 +63,54 @@ echo "<INFO> Kodi selbst bleibt installiert: sudo apt purge kodi"
 # ohne ihn blieb bei fehlenden Argumenten alles liegen, waehrend die
 # Schlusszeile "Alles entfernt" meldete.
 UN_FOLDER="${3:-kodi_ng}"
+
+# DIE WURZEL WIRD GESUCHT, NICHT GESETZT - Hausmuster aus REGELN_2.
+#
+# Drei Anlaeufe, und die ersten beiden waren falsch. Beide stehen hier, weil
+# der naechste sonst denselben Weg noch einmal geht:
+#
+# 1. Ein Rueckfall auf das uebliche Installationsverzeichnis. Der
+#    Pluginpruefer von LoxBerry hat ihn beim Einspielen beanstandet - zu
+#    Recht: LoxBerry laesst sich anderswohin installieren. Peinlich daran ist,
+#    dass dieselbe Fassung genau so einen Pfad an anderer Stelle ENTFERNT
+#    hat; hier ist er neu entstanden.
+#
+# 2. Aufwaerts suchen, aber OHNE Tiefengrenze. Gemessen auf dem
+#    Entwicklungsrechner: der Lauf fand die Wurzel des Laufwerks, weil dort
+#    config/plugins und data/plugins zufaellig existierten - danach waere
+#    "rm -rf" gegen einen geratenen Baum gelaufen.
+#
+# Das Hausmuster hat genau deshalb eine harte Obergrenze: die echte Wurzel
+# liegt vom Ablageort dieser Datei fuenf Ebenen entfernt, ein Fehltreffer
+# weiter oben wird von der Zaehlung abgeschnitten. Und ein Verzeichnis gilt
+# nur dann als Wurzel, wenn es config/plugins UND data/plugins traegt.
+#
+# Der Systempfad steht auch in diesen Erlaeuterungen NICHT ausgeschrieben:
+# der Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu lesen, und
+# beanstandet dann den Kommentar, der den Fehler erklaert.
+lb_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ]; then
+            echo "$v"
+            return 0
+        fi
+        v=$(dirname "$v")
+        i=$((i + 1))
+    done
+    return 1
+}
 UN_BASE="${5:-$LBHOMEDIR}"
-if [ -z "$UN_BASE" ] && [ -d /opt/loxberry/config/plugins ]; then
-    UN_BASE=/opt/loxberry
+if [ -z "$UN_BASE" ] || [ ! -d "$UN_BASE" ]; then
+    UN_BASE=$(lb_wurzel_suchen)
 fi
+
+# Und wenn auch das nichts findet: fail closed.
+#
+# Massgeblich sind das fuenfte Argument des Installers und LBHOMEDIR; erst
+# danach die Suche oben. Findet auch sie nichts, wird NICHTS geloescht - und
+# genau gesagt, was dann liegenbleibt und warum das nicht gleichgueltig ist.
 if [ -z "$UN_BASE" ]; then
     echo "<WARNING> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln."
     echo "<WARNING> Diese Dateien bleiben deshalb LIEGEN und muessen von Hand weg:"

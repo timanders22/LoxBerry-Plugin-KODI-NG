@@ -1,12 +1,58 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.0 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.1 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.1 – Berichtigung
+
+**Ein einziger Befund, und er kam aus dem Betrieb.** Beim Einspielen von 1.2.0
+meldet der Pluginprüfer von LoxBerry:
+
+```
+WARNING Kodi NG: HARDCODED PATH'S: Das Plugin nutzt einen hardkodierten Pfad
+zu <LoxBerry-Wurzel> … /uninstall/uninstall
+```
+
+In `uninstall/uninstall` stand ein fester Rückfall auf das übliche
+Installationsverzeichnis. Er war in 1.2.0 **neu entstanden** — beim Beheben
+eines anderen Befundes, und ausgerechnet in derselben Fassung, die an anderer
+Stelle genau so einen Pfad *entfernt* hat. Die Regel dagegen steht seit dem
+22.08.2026 in den Hausregeln, samt Vorlage.
+
+Die Wurzel wird jetzt **gesucht statt gesetzt**, nach dem Hausmuster: vom
+eigenen Ablageort aufwärts, bis ein Verzeichnis gefunden ist, das
+`config/plugins` **und** `data/plugins` trägt — mit **harter Obergrenze von
+acht Ebenen**. Die Grenze ist kein Beiwerk: der erste Versuch hatte keine, und
+auf dem Entwicklungsrechner fand der Lauf daraufhin die Wurzel des Laufwerks,
+weil dort beide Verzeichnisse zufällig existierten. Danach wäre `rm -rf` gegen
+einen geratenen Baum gelaufen. Findet die Suche nichts, wird **nichts
+gelöscht** und gesagt, was liegenbleibt.
+
+Zwei kleinere Punkte derselben Klasse gingen mit:
+
+* **Auch der Kommentar durfte den Pfad nicht nennen.** In `bin/ko_lib.php`
+  stand er in einem Satz, der erklärte, warum er falsch wäre. Der Prüfer sucht
+  die Zeichenkette und liest den Zusammenhang nicht — er hätte den Kommentar
+  genauso beanstandet wie den Fehler.
+* **`config/` steht jetzt in der `.gitignore`.** Läuft `index.php` ohne
+  `LBHOMEDIR` — also aus dem entpackten Archiv, wie bei jedem Prüflauf —,
+  fallen die Pfade auf `<paket>/config/` zurück, und dort entsteht das
+  Formularmerkmal `ko_formkey`. Beim Packen wanderte es einmal mit: das Archiv
+  hatte 47 statt 46 Dateien, und die überzählige war ein **Geheimnis**.
+  Aufgefallen ist es nur, weil die Dateizahl mitgezählt wurde.
+
+**Und die Lehre über allen dreien:** die Prüfkette war grün — zehn Prüfungen,
+null Beanstandungen — während der Fehler im ausgelieferten Paket lag. Es gab
+schlicht kein Werkzeug, das nach harten Pfaden sucht; die Regel stand in Prosa.
+Seit dieser Fassung gibt es `Werkzeuge/harte_pfade.py`, geeicht in beide
+Richtungen und über den ganzen Bestand gelaufen.
+
+Sonst ist 1.2.1 inhaltlich gleich 1.2.0.
 
 ## Version 1.2.0 – was ist neu
 

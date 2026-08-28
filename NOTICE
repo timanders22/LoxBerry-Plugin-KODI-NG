@@ -124,6 +124,19 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        Das Kodi-Addon traegt jetzt Fassung 3.1.0 (Titel je Medienart, Raeumen
        beim Stoppen, ausgeschriebene Themenliste).
 
+1.2.1  Berichtigung eines Fehlers, der in 1.2.0 neu entstanden ist: in
+       uninstall/uninstall stand ein fest verdrahtetes Installations-
+       verzeichnis als Rueckfall. Der Pluginpruefer von LoxBerry beanstandet
+       das beim Einspielen; die Wurzel wird jetzt gesucht statt gesetzt, nach
+       dem Hausmuster mit harter Obergrenze, und ohne Fund wird nichts
+       geloescht.
+
+       Dazu zwei Punkte derselben Klasse: der Pfad stand auch in einem
+       erklaerenden Kommentar (der Pruefer liest die Zeichenkette, nicht den
+       Zusammenhang), und config/ steht jetzt in der .gitignore - ein
+       Prueflauf ohne LBHOMEDIR legt dort das Formularmerkmal an, und es war
+       einmal mit ins Archiv geraten.
+
 Marken
 ------
 Kodi ist eine Marke der XBMC Foundation. Dieses Plugin steht in keiner
