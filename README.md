@@ -1,12 +1,180 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.1 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.2 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.2 – „Ist Kodi überhaupt installiert?"
+
+**Das Plugin hat diese Frage nie gestellt.** Kodi kommt mit dem Plugin: beim
+Einspielen liest LoxBerry die Datei `dpkg/apt` und holt das Paket `kodi` aus
+der Standardquelle von Raspberry Pi OS. Geht das schief — kein Netz, Platte
+voll, Paket gerade nicht verfügbar —, dann installiert sich das Plugin
+**trotzdem erfolgreich**: die systemd-Unit wird angelegt und eingeschaltet, ihr
+`ExecStart` zeigt ins Leere, `systemctl is-active` meldet *inactive*.
+
+Und die Oberfläche sagte daraufhin: **„Kodi: gestoppt".**
+
+Das ist eine Falschaussage, nicht bloß eine unvollständige. „Gestoppt" heißt
+*es ist da und läuft gerade nicht*; hier ist gar nichts da. Der Anwender drückt
+also Start, systemd bricht mit `203/EXEC` ab und gibt nach fünf Versuchen auf —
+und der wahre Grund stand an keiner Stelle der Oberfläche.
+
+Seit 1.2.2 wird gefragt, an drei Stellen:
+
+* **Reiter *Test*, eine neue Zeile vor der Dienstzeile:** *Ist Kodi überhaupt
+  installiert?* Sie unterscheidet vier Lagen — Paket und Programm da (Haken,
+  mit genannter Paketfassung); Programm da, aber kein Paket `kodi` (Haken, von
+  Hand gebaut oder aus fremder Quelle, die Fassung ist dann nicht zu nennen);
+  Paket eingetragen, Programm fehlt (Kreuz, unvollständig installiert); nichts
+  von beidem (Kreuz, mit dem Weg zurück).
+* **Die Dienstzeile darunter sagt nicht mehr „gestoppt", wenn es nichts zu
+  starten gibt**, sondern nennt den Grund und warnt vor dem Startknopf.
+* **Die Kachel oben** kennt jetzt drei Zustände statt zwei: *läuft*,
+  *gestoppt*, *nicht installiert*.
+
+**Der Pfad zum Programm kommt aus der mitgelieferten `kodi_ng.service`**, nicht
+aus dem Gedächtnis — er steht dort genau einmal. Ihn im PHP ein zweites Mal
+hinzuschreiben wäre eine zweite Wahrheit, die beim nächsten Umbau der Unit
+zurückbliebe. Ist die Unit nicht lesbar, sagt die Zeile **„nicht
+feststellbar"** und rät nichts.
+
+Dazu zwei Sätze in der Hilfe, die eine wiederkehrende Frage beantworten: Kodi
+muss **nicht getrennt installiert** werden, und wenn doch etwas fehlt, sagt es
+diese Prüfzeile.
+
+**Ein Knopf „Kodi jetzt installieren" ist bewusst nicht dabei.** Ein `apt-get`
+über die Weboberfläche läuft minutenlang, ohne Rückmeldung, mit Root-Rechten
+und ohne Aussicht darauf, einen Abbruch mittendrin sauber aufzuräumen. Der Weg
+über ein erneutes Einspielen des Plugins tut dasselbe, nur beaufsichtigt.
+
+### Der erste Gerätebefund: das Plugin lehnte seine eigene Sicherung ab
+
+Aus dem Betrieb, am Tag der ersten Installation:
+
+```
+Übersteht die Sicherung eine Rundreise?   NEIN
+Unzulässiger Wert für addon_udp_port:  |  Unzulässiger Wert für addon_volume_on_start:
+```
+
+**Ein leeres Addon-Feld ist ein gültiger Zustand — und zwar genau der, den ein
+frisch aufgesetztes Gerät hat.** Kodi legt ein nie angefasstes Feld als
+`<setting id="udp_port" default="true"></setting>` ab; das Addon fällt dann auf
+seine eigene Vorgabe zurück. Die *Schreibseite* des Plugins kennt das und
+schreibt den leeren Wert ausdrücklich als `-`. Die *Leseseite* wies ihn ab.
+
+Damit lehnte das Plugin genau die Sicherung ab, die es selbst erzeugt hatte —
+auf jedem Gerät, auf dem die Addon-Einstellungen noch nie angefasst wurden.
+Also auf jedem neuen.
+
+Die Regel gilt jetzt an **beiden** Stellen, im PHP und im Helfer mit erhöhten
+Rechten: **leer ist erlaubt und heißt „nicht gesetzt".** Die Bereichsprüfungen
+(Port 1…65535, Lautstärke 0…100) gelten nur für nicht-leere Werte — ein leerer
+Wert hat keinen Bereich. Dass das Addon damit umgeht, ist nachgelesen und nicht
+vermutet: `SetVolume` steht in einem `try/except`, `send_raw_udp` fängt jede
+Ausnahme, und UDP wie MQTT werden überhaupt nur gesendet, wenn die zugehörige
+**Adresse** nicht leer ist.
+
+Warum die Prüfstände das nicht gefunden haben: ohne Helfer liefert
+`ko_addon_lesen()` `null`, und dann stehen gar keine `addon_`-Zeilen in der
+Sicherung. Der Fall war nie aufgebaut. Seit dieser Fassung baut ihn
+`ps/t_rundreise.py` auf — mit dem *echten* Lesecode des Helfers, angewandt auf
+eine Nachbildung der Gerätedatei — und `t_addonwrite.pl` misst dieselbe Regel
+noch einmal an der Prüfschleife des Helfers selbst, samt Gegenprobe, dass Port
+0, Port 99999 und Lautstärke 101 weiterhin abgewiesen werden.
+
+**Und die Prüfzeile, die den Befund gebracht hat, war schon da.** *Übersteht die
+Sicherung eine Rundreise?* wurde in 1.2.0 gebaut, für genau diese Klasse — einen
+Fehler, der sonst erst beim Zurückspielen auffällt, Monate später und auf einem
+anderen Gerät. Sie hat ihn am ersten Tag gefunden.
+
+### Zwei Fragen vom Gerät — und beide waren Lücken in der Auskunft
+
+**„Warum steht der Dienst nach der Installation auf *gestoppt*?"** Weil
+`postroot.sh` `systemctl enable` macht und **nicht** `start` — mit Absicht: die
+Gruppenrechte für Ton, Bild und Eingabegeräte (`usermod -a -G`) und die
+GPU-Einstellung in der `config.txt` greifen erst nach einem Neustart. Genau
+deshalb trägt `plugin.cfg` `REBOOT=true`, und LoxBerry fragt nach der
+Installation nach einem Neustart. Danach läuft Kodi von selbst.
+
+Das war richtig gebaut — und **nirgends gesagt**. Die Kachel zeigte *gestoppt*,
+der Autostart *ein*, und der Zusammenhang war nicht zu erraten. Die Dienstzeile
+im Reiter *Test* nennt ihn jetzt, samt der Nebenwirkung: wer stattdessen sofort
+startet, dem fehlen bis zum nächsten Neustart genau jene Rechte.
+
+**„Warum gibt es keinen Knopf, der Kodis Weboberfläche aufruft?"** Den gab es —
+im Reiter *Test* unter *Ansehen*, also zwei Reiter von der Adresse entfernt.
+Jetzt steht er **auch dort, wo die Adresse eingetragen wird**, und beide Stellen
+holen sie aus derselben Funktion.
+
+Die Adresse ist dabei der eigentliche Punkt. In der Konfiguration steht
+`127.0.0.1`, und das ist **richtig** — das Plugin läuft auf demselben Gerät wie
+Kodi. Im Browser des Anwenders meint `127.0.0.1` aber dessen **eigenen**
+Rechner; genau daran gab es ein `ERR_CONNECTION_REFUSED`. Der Knopf nimmt
+deshalb den Wirtsnamen, unter dem der Anwender *diese Seite gerade sieht* — die
+einzige Adresse, von der feststeht, dass sie zum LoxBerry führt. Zeigt
+`kodi_host` auf ein anderes Gerät, gilt diese Angabe.
+
+Beim Zusammenführen kamen drei Mängel des alten Verweises mit heraus, alle drei
+gemessen von `ps/t_weblink.py`:
+
+* er trug `target="_blank"` **ohne** `rel="noopener noreferrer"` — die geöffnete
+  Seite kann sonst über `window.opener` auf die öffnende zugreifen;
+* er wurde auch bei **unzulässigem Port** angeboten und zeigte dann auf
+  `http://<wirt>:0` — ein Knopf ins Leere;
+* die Regel „welcher Wirtsname ist für den Anwender sichtbar" stand **zweimal**
+  im Quelltext. Jetzt sagt `ko_sicht_wirt()` sie einmal.
+
+**Die leere Seite ist übrigens kein Fehler.** Kodi liefert seit Fassung 18 keine
+Weboberfläche mehr mit; steht unter *Weboberfläche* „Keine", antwortet der
+Webserver auf `/` mit einem leeren Rumpf — während `/jsonrpc` tadellos
+antwortet. **Dieses Plugin braucht sie nicht:** es spricht ausschließlich
+`/jsonrpc` an. Wer sie will, installiert sie in Kodi als Erweiterung (etwa
+Chorus2). Auch das steht jetzt in der Hilfe unter dem Knopf.
+
+### Was daneben an den Werkzeugen berichtigt wurde
+
+* **`harte_pfade.py` hängt jetzt in `freigabe_pruefen.py`** (Prüfung 4d). Der
+  Befund von 1.2.1 konnte nur deshalb ins ausgelieferte Paket geraten, weil die
+  Regel in Prosa stand und kein Werkzeug danach suchte. Die Prüfung kennt zwei
+  Stufen: **hart** wird sie bei Fundstellen in endungslosen Dateien — nur die
+  sieht der Pluginprüfer wirklich —, und **genannt, aber nicht hart** bei
+  Kommentaren und README-Beispielen. Sonst wäre die erste Folge eine
+  Freigabewelle über fünfzehn veröffentlichte Linien gewesen, deren Fundstellen
+  beim Einspielen nichts auslösen.
+* **`sicherung_verdrahtung.py` fand den Sicherungszweig dieser Linie nicht.**
+  Es verlangte den Knopfnamen mit Kürzel (`ko_sichern`) und die Wache als
+  Variable; hier heißt der Knopf `sichern` und die Wache ist `ko_ist_post()`.
+  Ergebnis: „0 Linien gemessen, 0 mit Befund" bei Rückgabewert 0 — das liest
+  sich wie bestanden. Jetzt misst es **52 Linien**.
+* **`php_bilanz.py` war über den ganzen Bestand rot.** Es meldete auf *jeder*
+  Linie `_exists` als doppelt definiert (sein Muster griff in
+  `function_exists(`) und jede JavaScript-Funktion als toten PHP-Code (die
+  Definitionen wurden im Rohtext gesucht, die Aufrufe im entkernten). Dazu
+  zählte eine mit `if (!function_exists(...))` **bewachte** Zweitdefinition —
+  das Hausmuster für die getrennten Bäume — als Doppelung. Von 16 roten Linien
+  bleibt **eine**, und die ist echt: Smartmeter classic definiert `sm_log`
+  ungedeckt in zwei Dateien.
+* **Die Perl-Attrappe `LoxBerry::System` log.** `begins_with` und `trim`
+  fehlten ganz, `is_enabled` stand als leeres Unterprogramm da und lieferte
+  damit **immer** *undef* — ein Prüfstand, der so misst, sieht jeden Schalter
+  als ausgeschaltet und meldet trotzdem grün. Alle drei sind jetzt dem echten
+  Vorbild nachgebaut und in beide Richtungen geeicht.
+
+### Was an dieser Fassung nicht gemessen ist
+
+Auf dem Entwicklungsrechner gibt es kein `dpkg`. Gemessen sind deshalb alle
+Zustände, die am **Vorhandensein der ausführbaren Datei** hängen — beide
+Antworten der Dienstzeile und alle drei Zustände der Kachel —, aber nicht der
+Unterschied zwischen *„ja, Paket 20.5"* und *„ja, aber ohne Paket"*. Diese eine
+Verzweigung steht erst am Gerät auf dem Prüfstand.
+
+Sonst ist 1.2.2 inhaltlich gleich 1.2.1 — bis auf die eine Stelle im
+Sicherungsweg, die der Gerätebefund oben aufgedeckt hat.
 
 ## Version 1.2.1 – Berichtigung
 

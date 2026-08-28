@@ -332,14 +332,54 @@ function ko_pruefungen(array $reiter, $indexdatei)
         $z[] = ko_pruefzeile(1, ko_t('TEST.F_HELFER'), ko_t('TEST.A_HELFER_OK'));
     }
 
+    /* --- Ist Kodi ueberhaupt installiert?
+     *     Diese Zeile steht VOR der Dienstzeile, weil sie deren Voraussetzung
+     *     ist: ueber einen Dienst zu urteilen, dessen Programm gar nicht da
+     *     ist, ergibt ein Kreuz, das in die Irre fuehrt. */
+    $kp = ko_kodi_paket();
+    if ($kp['exec'] === '') {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_KODIPAKET'), ko_t('TEST.A_KODIPAKET_UNKLAR'));
+    } elseif ($kp['datei'] && $kp['paket'] !== '') {
+        $z[] = ko_pruefzeile(1, ko_t('TEST.F_KODIPAKET'),
+            sprintf(ko_t('TEST.A_KODIPAKET_OK'),
+                '<span class="sm-mono">' . ko_e($kp['paket']) . '</span>',
+                '<span class="sm-mono">' . ko_e($kp['exec']) . '</span>'));
+    } elseif ($kp['datei']) {
+        $z[] = ko_pruefzeile(1, ko_t('TEST.F_KODIPAKET'),
+            sprintf(ko_t('TEST.A_KODIPAKET_OHNE_PAKET'),
+                '<span class="sm-mono">' . ko_e($kp['exec']) . '</span>'));
+    } elseif ($kp['paket'] !== '') {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_KODIPAKET'),
+            sprintf(ko_t('TEST.A_KODIPAKET_OHNE_DATEI'),
+                '<span class="sm-mono">' . ko_e($kp['paket']) . '</span>',
+                '<span class="sm-mono">' . ko_e($kp['exec']) . '</span>'));
+    } else {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_KODIPAKET'),
+            sprintf(ko_t('TEST.A_KODIPAKET_NEIN'),
+                '<span class="sm-mono">' . ko_e($kp['exec']) . '</span>'));
+    }
+
     /* --- Der Kodi-Dienst. */
     if (!$st) {
         $z[] = ko_pruefzeile(-1, ko_t('TEST.F_DIENST'), ko_t('TEST.A_DIENST_UNBEKANNT'));
         $z[] = ko_pruefzeile(-1, ko_t('TEST.F_AUTOSTART'), ko_t('TEST.A_DIENST_UNBEKANNT'));
     } else {
         $laeuft = !empty($st['kodistarted']);
+        /* "gestoppt" nur sagen, wenn es etwas zu starten GIBT. Fehlt die
+         * ausfuehrbare Datei, ist der Dienst nicht gestoppt, sondern ohne
+         * Programm - und der Startknopf hilft nicht. */
+        $ohne_programm = !$laeuft && $kp['exec'] !== '' && !$kp['datei'];
+        /* "gestoppt, aber Autostart ein" ist der Zustand UNMITTELBAR NACH DER
+         * INSTALLATION - und er sah aus wie ein Versaeumnis. Er ist keins:
+         * postroot.sh macht `systemctl enable`, nicht `start`, weil die
+         * Gruppenrechte und die GPU-Einstellung erst nach einem Neustart
+         * greifen. Gefragt am 29.08.2026, weil es nirgends stand. */
+        $nach_neustart = !$laeuft && !$ohne_programm && !empty($st['kodiautostart']);
         $z[] = ko_pruefzeile($laeuft ? 1 : 0, ko_t('TEST.F_DIENST'),
-            $laeuft ? ko_t('TEST.A_DIENST_LAEUFT') : ko_t('TEST.A_DIENST_GESTOPPT'));
+            $laeuft ? ko_t('TEST.A_DIENST_LAEUFT')
+                    : ($ohne_programm ? ko_t('TEST.A_DIENST_OHNE_PROGRAMM')
+                        : ($nach_neustart ? ko_t('TEST.A_DIENST_NACH_NEUSTART')
+                                          : ko_t('TEST.A_DIENST_GESTOPPT'))));
         $auto = !empty($st['kodiautostart']);
         // Autostart aus ist eine ENTSCHEIDUNG des Anwenders, kein Mangel -
         // deshalb ein Strich und kein Kreuz.

@@ -599,6 +599,127 @@ if (!function_exists('ko_status')) {
     }
 }
 
+/**
+ * Ist Kodi ueberhaupt installiert?
+ *
+ * WOZU: Bis 1.2.1 fragte das niemand. Scheitert das apt-get beim Installieren
+ * des Plugins, wird die systemd-Unit trotzdem angelegt und eingeschaltet, ihr
+ * ExecStart zeigt ins Leere, und `systemctl is-active` meldet inactive. Die
+ * Oberflaeche sagte daraufhin "Kodi: gestoppt" - eine Falschaussage, denn es
+ * gibt nichts zu starten. Der Anwender drueckt Start, systemd bricht mit
+ * 203/EXEC ab und gibt nach fuenf Versuchen auf; der wahre Grund stand
+ * nirgends.
+ *
+ * DER PFAD KOMMT AUS DER UNIT, nicht aus dem Gedaechtnis. Er steht in
+ * data/kodi_ng.service genau einmal; ihn hier ein zweites Mal hinzuschreiben
+ * waere eine zweite Wahrheit, die beim naechsten Umbau der Unit zurueckbleibt.
+ * Ist die Unit nicht lesbar, wird das GEMELDET und nichts geraten.
+ *
+ * Gefragt werden zwei Dinge, und sie sind verschieden:
+ *   datei  gibt es die ausfuehrbare Datei? Daran haengt, ob der Dienst
+ *          ueberhaupt starten kann.
+ *   paket  kennt dpkg ein installiertes Paket "kodi"? Das ist die Auskunft
+ *          ueber die Herkunft - ein von Hand gebautes Kodi hat keins und
+ *          laeuft trotzdem.
+ */
+if (!function_exists('ko_kodi_paket')) {
+    function ko_kodi_paket()
+    {
+        static $i = null;
+        if ($i !== null) { return $i; }
+
+        $exec = '';
+        $unit = ko_lesen(ko_paths()['data'] . '/kodi_ng.service');
+        if ($unit === '') {
+            // Im entpackten Archiv liegt sie eine Ebene hoeher.
+            $unit = ko_lesen(dirname(__DIR__) . '/data/kodi_ng.service');
+        }
+        if (preg_match('/^ExecStart=(\S+)/m', $unit, $m)) { $exec = $m[1]; }
+
+        $paket = '';
+        $roh = trim((string) @shell_exec(
+            'dpkg-query -W -f=\'${Status}|${Version}\' kodi 2>/dev/null'));
+        /* "install ok installed" ist der einzige Zustand, der zaehlt.
+         * "deinstall ok config-files" heisst entfernt, die Konfiguration liegt
+         * noch da - das ist NICHT installiert. */
+        if (strpos($roh, 'install ok installed') === 0) {
+            $t = explode('|', $roh);
+            $paket = isset($t[1]) && trim($t[1]) !== '' ? trim($t[1]) : '?';
+        }
+
+        $i = array(
+            'exec'  => $exec,
+            'datei' => ($exec !== '' && @is_file($exec)),
+            'paket' => $paket,
+        );
+        return $i;
+    }
+}
+
+/**
+ * Der Wirtsname, unter dem der ANWENDER diesen LoxBerry gerade sieht.
+ *
+ * Aus der laufenden Anfrage, ohne Port. Sie ist die einzige Adresse, von der
+ * feststeht, dass sie ihn zum LoxBerry fuehrt - eine aus der Netzkonfiguration
+ * gelesene IP kann hinter einem VPN oder einem vorgeschalteten Server falsch
+ * sein. Der Kopf Host: kommt allerdings vom Browser und damit von aussen,
+ * deshalb die Positivliste.
+ *
+ * Rueckgabe '' heisst "nicht feststellbar" - die Aufrufer bieten dann keinen
+ * Verweis an, statt einen ins Leere zeigenden.
+ */
+if (!function_exists('ko_sicht_wirt')) {
+    function ko_sicht_wirt()
+    {
+        if (isset($_SERVER['HTTP_HOST']) && is_string($_SERVER['HTTP_HOST'])) {
+            $h = $_SERVER['HTTP_HOST'];
+            if (preg_match('/^\[[0-9A-Fa-f:]{2,45}\]/', $h, $m)) { return $m[0]; }
+            if (preg_match('/^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})/', $h, $m)) { return $m[0]; }
+        }
+        return ko_lokale_ip();
+    }
+}
+
+/**
+ * Unter welcher Adresse erreicht der ANWENDER die Weboberflaeche von Kodi?
+ *
+ * Das ist NICHT die Adresse aus der Konfiguration. Dort steht ab Werk
+ * 127.0.0.1, und das ist richtig: das Plugin laeuft auf demselben Geraet wie
+ * Kodi. Im Browser des Anwenders meint 127.0.0.1 aber dessen EIGENEN Rechner
+ * - dort laeuft kein Kodi, und der Browser meldet ERR_CONNECTION_REFUSED.
+ * Genau diese Verwechslung ist am 28.08.2026 vorgekommen.
+ *
+ * Genommen wird deshalb die Adresse, unter der der Anwender DIESE SEITE
+ * gerade sieht. Sie ist die einzige, von der feststeht, dass sie ihn zum
+ * LoxBerry fuehrt - eine aus der Netzkonfiguration gelesene IP kann hinter
+ * einem VPN oder einem vorgeschalteten Server falsch sein.
+ *
+ * Zeigt kodi_host dagegen auf ein ANDERES Geraet, gilt diese Angabe: dann
+ * laeuft Kodi eben dort.
+ *
+ * Rueckgabe '' heisst "keine nennbare Adresse" - dann wird kein Knopf
+ * angeboten, statt einen ins Leere zeigenden.
+ */
+if (!function_exists('ko_kodi_url')) {
+    function ko_kodi_url()
+    {
+        $cfg = ko_config();
+        $port = (int) $cfg['kodi_port'];
+        if ($port < 1 || $port > 65535) { return ''; }
+
+        $host = trim((string) $cfg['kodi_host']);
+        $eigen = array('127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0');
+        if ($host !== '' && !in_array(strtolower($host), $eigen, true)) {
+            return 'http://' . $host . ':' . $port . '/';
+        }
+
+        // Kodi laeuft auf diesem LoxBerry - siehe ko_sicht_wirt().
+        $host = ko_sicht_wirt();
+        if ($host === '') { return ''; }
+        return 'http://' . $host . ':' . $port . '/';
+    }
+}
+
 /* ================================================================
    MQTT
    ================================================================ */
@@ -1019,6 +1140,23 @@ if (!function_exists('ko_addon_wert_pruefen')) {
     function ko_addon_wert_pruefen($feld, $wert)
     {
         $w = trim((string) $wert);
+
+        /* LEER IST EIN GUELTIGER ZUSTAND, und zwar der Auslieferungszustand.
+         * Kodi legt ein nie angefasstes Feld als
+         * <setting id="udp_port" default="true"></setting> ab; das Addon
+         * faellt dann auf seine eigene Vorgabe zurueck (read_settings).
+         *
+         * Bis 1.2.2 wies diese Stelle den leeren Wert ab - waehrend
+         * ko_sicherung_text() ihn ausdruecklich als "-" schreibt. Folge: das
+         * Plugin lehnte seine EIGENE Sicherung ab, auf jedem Geraet, auf dem
+         * die Addon-Einstellungen noch nie angefasst wurden. Gemeldet aus dem
+         * Betrieb am 28.08.2026 (addon_udp_port und addon_volume_on_start).
+         *
+         * Die Zeile steht VOR dem switch, weil sie fuer alle Felder gilt -
+         * eine Ausnahme je Feld waere sieben Stellen, die auseinanderlaufen
+         * koennen. Dieselbe Regel steht im Helfer (%addon_muster). */
+        if ($w === '') { return ''; }
+
         switch ($feld) {
             case 'udp_address':
             case 'mqtt_address':

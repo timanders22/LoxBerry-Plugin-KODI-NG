@@ -277,6 +277,11 @@ if ($action eq "addonwrite") {
 	foreach my $feld (sort keys %addon_muster) {
 		my $v = addon_arg($feld);
 		next if (!defined $v);
+		# LEER IST GUELTIG und heisst "nicht gesetzt" - so legt Kodi ein nie
+		# angefasstes Feld ab, und so kommt es aus einer Sicherung zurueck.
+		# Ohne diese Zeile laesst sich der Auslieferungszustand eines Geraets
+		# nicht zurueckspielen; die PHP-Seite kennt dieselbe Regel.
+		if ($v eq '') { $neu{$feld} = ''; next; }
 		if ($v !~ $addon_muster{$feld}) {
 			push @mangel, $feld;
 			next;

@@ -137,6 +137,43 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        Prueflauf ohne LBHOMEDIR legt dort das Formularmerkmal an, und es war
        einmal mit ins Archiv geraten.
 
+1.2.2  Das Plugin fragte nirgends, ob Kodi ueberhaupt installiert ist.
+       Scheitert das apt-get beim Einspielen, wird die systemd-Unit trotzdem
+       angelegt; ihr ExecStart zeigt ins Leere, und die Oberflaeche meldete
+       daraufhin "Kodi: gestoppt" - eine Falschaussage, denn es gab nichts zu
+       starten. Neu sind eine Pruefzeile im Reiter Test mit vier
+       unterschiedenen Lagen, eine Dienstzeile, die den Grund nennt statt
+       "gestoppt" zu behaupten, und eine Kachel mit drei Zustaenden. Der Pfad
+       zum Programm wird aus der mitgelieferten kodi_ng.service gelesen, nicht
+       im PHP wiederholt; ist sie nicht lesbar, wird das gesagt und nichts
+       geraten. Dazu zwei Hilfesaetze: Kodi muss nicht getrennt installiert
+       werden.
+
+       Ein Knopf, der Kodi nachinstalliert, ist bewusst nicht dabei - ein
+       minutenlanges apt-get mit Root-Rechten ueber die Weboberfläche liesse
+       sich bei einem Abbruch nicht sauber aufraeumen.
+
+       Gerätebefund vom 28.08.2026, in derselben Fassung behoben: ein LEERES
+       Addon-Feld wurde beim Einlesen einer Sicherung abgewiesen, obwohl die
+       Schreibseite es ausdruecklich als "-" schreibt. Kodi legt ein nie
+       angefasstes Feld leer ab; damit lehnte das Plugin auf jedem neuen
+       Geraet seine eigene Sicherung ab. Leer heisst jetzt an beiden Stellen
+       - im PHP und im Helfer - "nicht gesetzt"; die Bereichspruefungen
+       gelten weiter fuer nicht-leere Werte.
+
+       Zwei Fragen aus dem Betrieb (29.08.2026), beide in derselben Fassung
+       beantwortet. Erstens sagte nichts, warum der Dienst nach dem
+       Einspielen auf "gestoppt" steht: postroot.sh macht enable und nicht
+       start, weil Gruppenrechte und GPU-Einstellung erst nach einem Neustart
+       greifen (REBOOT=true). Die Dienstzeile im Reiter Test nennt das jetzt.
+       Zweitens stand der Verweis auf Kodis Weboberflaeche nur im Reiter Test
+       und wurde dort nicht gefunden; er steht jetzt auch bei der Adresse.
+       Beide Stellen holen sie aus ko_kodi_url(), das den Wirtsnamen der
+       laufenden Anfrage nimmt - 127.0.0.1 aus der Konfiguration ist fuer das
+       Plugin richtig, im Browser des Anwenders aber dessen eigener Rechner.
+       Mitgegangen: der alte Verweis trug kein rel="noopener noreferrer" und
+       wurde auch bei unzulaessigem Port angeboten.
+
 Marken
 ------
 Kodi ist eine Marke der XBMC Foundation. Dieses Plugin steht in keiner

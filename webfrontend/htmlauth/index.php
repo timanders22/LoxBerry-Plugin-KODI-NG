@@ -432,7 +432,9 @@ if (ko_ist_post()) {
              * Dienst danach WIRKLICH tut. */
             $ko_st = ko_status(true);
             $ko_note = sprintf(ko_t('MELDUNG.BEFEHL_GESCHICKT'), '<b>' . ko_e($ko_was) . '</b>',
-                '<b>' . (!empty($ko_st['kodistarted']) ? ko_t('ALLG.LAEUFT') : ko_t('ALLG.GESTOPPT')) . '</b>');
+                '<b>' . (!empty($ko_st['kodistarted']) ? ko_t('ALLG.LAEUFT')
+                    : (ko_kodi_paket()['datei'] === false && ko_kodi_paket()['exec'] !== ''
+                        ? ko_t('ALLG.NICHT_INSTALLIERT') : ko_t('ALLG.GESTOPPT'))) . '</b>');
         }
         $ko_tab = 'tab-test';
     }
@@ -484,8 +486,14 @@ if ($ko_frame) { LBWeb::lbheader(ko_t('ALLG.TITEL'), 'https://wiki.loxberry.de/'
 /* NICHT hier maskieren: beide Verwendungsstellen schicken den Wert ohnehin
  * durch ko_e(). Doppelt maskiert stand ohne Host-Kopfzeile woertlich
  * "tcp://&lt;loxberry-ip&gt;:9090" auf dem Bildschirm - gemessen. */
-$ko_host = isset($_SERVER['HTTP_HOST'])
-    ? preg_replace('/:\d+$/', '', (string) $_SERVER['HTTP_HOST']) : '<loxberry-ip>';
+$ko_host = ko_sicht_wirt();
+if ($ko_host === '') { $ko_host = '<loxberry-ip>'; }
+/* Der Verweis auf Kodis Weboberflaeche - EINMAL ermittelt, an zwei Stellen
+ * angeboten (Reiter Einstellungen bei der Adresse, Reiter Test unter
+ * "Ansehen"). Er zeigt die GESPEICHERTE Adresse, nicht die im Eingabefeld:
+ * was noch nicht gespeichert ist, gilt fuer Kodi auch nicht. Ist sie leer,
+ * wird kein Knopf angeboten - einer ins Leere ist schlimmer als keiner. */
+$ko_weburl = ko_kodi_url();
 ?>
 <style>
 /* Hausstandard: eigener Behaelter, kein Schattenwurf, Reiter im Fluss.
@@ -604,7 +612,13 @@ $ko_host = isset($_SERVER['HTTP_HOST'])
 <div class="sm-kacheln">
   <div class="sm-kachel"><?= ko_e(ko_t('ALLG.DIENST')) ?>
     <b class="<?= (!empty($ko_st['kodistarted'])) ? 'sm-an' : 'sm-aus' ?>"><?php
-      echo !$ko_st ? '?' : ko_e(!empty($ko_st['kodistarted']) ? ko_t('ALLG.LAEUFT') : ko_t('ALLG.GESTOPPT')); ?></b></div>
+      /* Drei Zustaende, nicht zwei: laeuft, gestoppt, und "gar nicht
+       * installiert". Der dritte sah bis 1.2.1 wie der zweite aus. */
+      $ko_kp = ko_kodi_paket();
+      if (!$ko_st) { echo '?'; }
+      elseif (!empty($ko_st['kodistarted'])) { echo ko_e(ko_t('ALLG.LAEUFT')); }
+      elseif ($ko_kp['exec'] !== '' && !$ko_kp['datei']) { echo ko_e(ko_t('ALLG.NICHT_INSTALLIERT')); }
+      else { echo ko_e(ko_t('ALLG.GESTOPPT')); } ?></b></div>
   <div class="sm-kachel"><?= ko_e(ko_t('ALLG.AUTOSTART')) ?>
     <b class="<?= (!empty($ko_st['kodiautostart'])) ? 'sm-an' : 'sm-aus' ?>"><?php
       echo !$ko_st ? '?' : ko_e(!empty($ko_st['kodiautostart']) ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS')); ?></b></div>
@@ -661,6 +675,14 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
     <input data-role="none" type="number" id="ko_portfeld" name="kodi_port" value="<?= (int) $ko_cfg['kodi_port'] ?>">
     <div class="sm-hilfe"><?= ko_t('EINST.H_PORT') ?></div>
 </div>
+<?php if ($ko_weburl !== '') { ?>
+<div class="sm-feld">
+    <a data-role="none" class="sm-btn sm-b-lesen" target="_blank" rel="noopener noreferrer"
+       href="<?= ko_e($ko_weburl) ?>"><?= ko_e(ko_t('TEST.K_WEBINTERFACE')) ?></a>
+    <div class="sm-hilfe"><?= sprintf(ko_t('EINST.H_WEB'),
+        '<span class="sm-mono">' . ko_e($ko_weburl) . '</span>') ?></div>
+</div>
+<?php } ?>
 <div class="sm-feld">
     <label for="ko_user"><?= ko_e(ko_t('EINST.L_USER')) ?></label>
     <input data-role="none" type="text" id="ko_user" name="kodi_user" value="<?= ko_e($ko_cfg['kodi_user']) ?>">
@@ -943,8 +965,14 @@ if ($ko_gwf >= 2) { ?>
 <h3><?= ko_e(ko_t('TEST.H3_ANSEHEN')) ?></h3>
 <div class="sm-knopfreihe">
     <a data-role="none" class="sm-btn sm-b-lesen" href="index.php?form=test"><?= ko_e(ko_t('TEST.K_STATUS_NEU')) ?></a>
-    <a data-role="none" class="sm-btn sm-b-lesen" target="_blank"
-       href="http://<?= ko_e($ko_cfg['kodi_host'] === '127.0.0.1' ? $ko_host : $ko_cfg['kodi_host']) ?>:<?= (int) $ko_cfg['kodi_port'] ?>"><?= ko_e(ko_t('TEST.K_WEBINTERFACE')) ?></a>
+<?php /* DIESELBE Adresse wie im Reiter Einstellungen - ko_kodi_url() sagt sie
+       * einmal. Bis 1.2.1 stand die Regel hier ein zweites Mal, ohne
+       * rel="noopener" und ohne Pruefung des Ports: bei Port 0 zeigte der
+       * Knopf auf http://<wirt>:0. */
+if ($ko_weburl !== '') { ?>
+    <a data-role="none" class="sm-btn sm-b-lesen" target="_blank" rel="noopener noreferrer"
+       href="<?= ko_e($ko_weburl) ?>"><?= ko_e(ko_t('TEST.K_WEBINTERFACE')) ?></a>
+<?php } ?>
 </div>
 
 <h3><?= ko_e(ko_t('TEST.H3_TECHNIK')) ?></h3>
