@@ -507,6 +507,7 @@ if (!function_exists('ko_log')) {
         /* Kappung nach dem Hausmuster: ab 500 kB bleiben die letzten 200
          * Zeilen stehen. Ohne sie waechst die Datei unbegrenzt - auf einer
          * SD-Karte ist das kein Schoenheitsfehler. */
+        clearstatcache(true, $datei);
         if (is_file($datei) && filesize($datei) > 512000) {
             // Mit @: zwischen filesize() und file() kann die Datei
             // verschwinden - etwa weil jemand im Reiter Logdateien geleert
