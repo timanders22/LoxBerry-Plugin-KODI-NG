@@ -1,6 +1,6 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.4 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.5 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
@@ -642,7 +642,14 @@ aus `ko_themen()`, und der Reiter Test hält sie gegen den Sendecode.
 
 Forum: https://www.loxforum.com/forum/projektforen/loxberry/plugins/150094-kodi-plugin-f%C3%BCr-loxberry
 
-## Änderungen in 1.1.0
+## Änderungen
+
+Die Freigabenotiz zu jeder Fassung steht bei den Releases:
+<https://github.com/timanders22/LoxBerry-Plugin-KODI-NG/releases>
+
+Der folgende Abschnitt hieß bis 1.2.4 „Änderungen in 1.1.0“ — eine Fassungsnummer
+in einer Überschrift wird mit jedem Release falscher. Der Inhalt bleibt, weil
+er beschreibt, *warum* das Plugin so gebaut ist; er betrifft die Fassung 1.1.0.
 
 ### Bestätigt und behoben
 
