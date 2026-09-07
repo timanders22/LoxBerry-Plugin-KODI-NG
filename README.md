@@ -1,12 +1,43 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.5 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.6 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.6 – die Steuerbefehle tragen endlich eine Beschriftung
+
+Bis 1.2.5 lieferte die Vorlage der Steuerbefehle **26 Ausgänge ohne
+Beschriftung**. Loxone Config nimmt den `Comment` einer Vorlage als
+**Anzeigenamen** — stand dort nichts, zeigte Config den Titel, und der ist
+hier der JSON-RPC-Methodenname: `Input.ContextMenu`, `Player.PlayPause Toggle`,
+`Application.SetMute Unmute`. Wer den Ausgang später in der Bausteinsuche
+suchte, suchte nach einer Kodi-Methode.
+
+Jetzt steht dort deutscher Text aus der Sprachdatei, mit dem Vorsatz `Kodi: `
+— die Bausteinsuche des Miniservers kennt den Geräteknoten nicht, und
+„Info" oder „zurück" gibt es in jedem Haus mehrfach:
+
+| Titel (unverändert) | Anzeigename ab 1.2.6 |
+|---|---|
+| `Input.Back` | Kodi: zurück |
+| `Input.ContextMenu` | Kodi: Kontextmenü |
+| `Player.PlayPause Toggle` | Kodi: Wiedergabe/Pause umschalten |
+| `Application.SetMute Unmute` | Kodi: Stummschaltung aufheben |
+
+**Die Titel sind ausdrücklich unverändert geblieben** — ein geänderter Titel
+legt beim erneuten Import neue Ausgänge **neben** die alten. Wer die Vorlage
+neu einliest, bekommt dieselben 26 Ausgänge, nur mit Namen. Gemessen: 26 von
+26 Titeln und 26 von 26 Befehlen byteweise wie in 1.2.5, 0 Ausgänge ohne
+Beschriftung (vorher 26), längster Anzeigename 36 Zeichen.
+
+Zwei Kleinigkeiten in derselben Datei: im Kommentar der Eingangsvorlage stand
+„noetig" statt „nötig", und beide Vorlagen sagen jetzt in ihrem Kopf, dass
+Loxone Config beim Import neu anlegt und nichts überschreibt — zweimal
+eingelesen ergibt doppelte Bausteine.
 
 ## Version 1.2.3 – „Aber wie komme ich zu Kodi?"
 

@@ -1731,7 +1731,9 @@ if (!function_exists('ko_vorlage')) {
         $o .= '<VirtualInHttp HintText="" Title="Kodi Zustand" Comment="Erzeugt vom LoxBerry-Plugin Kodi NG ('
             . date('d.m.Y') . '). Werte kommen vom MQTT-Gateway - Abo '
             . htmlspecialchars($topic, ENT_QUOTES | ENT_XML1, 'UTF-8')
-            . '/# noetig." Address="http://localhost" PollingTime="604800">' . $crlf;
+            . '/# nötig. Loxone Config legt beim Import neu an und '
+            . 'überschreibt nichts - zweimal eingelesen ergibt doppelte Bausteine."'
+            . ' Address="http://localhost" PollingTime="604800">' . $crlf;
         $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
         foreach (ko_themen() as $t) {
             if (!$t['zahl'] || $t['quelle'] !== 'plugin') { continue; }
@@ -1767,34 +1769,38 @@ if (!function_exists('ko_vorlage')) {
 if (!function_exists('ko_vo_befehle')) {
     function ko_vo_befehle()
     {
-        // $c[1] traegt die Maskierung des Originals (&quot;) bereits in sich.
+        // $c[0] Titel (unveraendert seit 1.2.0 - ein geaenderter Titel legt
+        //       beim erneuten Import neue Ausgaenge NEBEN die alten),
+        // $c[1] Sprachschluessel der Beschriftung (Abschnitt VOBEF),
+        // $c[2] Befehl; traegt die Maskierung des Originals (&quot;) bereits
+        //       in sich.
         return array(
-            array('Input.Back', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Back&quot;, &quot;id&quot;: 1}'),
-            array('Input.ContextMenu', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.ContextMenu&quot;, &quot;id&quot;: 1}'),
-            array('Input.Down', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Down&quot;, &quot;id&quot;: 1}'),
-            array('Input.Home', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Home&quot;, &quot;id&quot;: 1}'),
-            array('Input.Info', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Info&quot;, &quot;id&quot;: 1}'),
-            array('Input.Left', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Left&quot;, &quot;id&quot;: 1}'),
-            array('Input.Right', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Right&quot;, &quot;id&quot;: 1}'),
-            array('Input.Select', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Select&quot;, &quot;id&quot;: 1}'),
-            array('Input.ShowOSD', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.ShowOSD&quot;, &quot;id&quot;: 1}'),
-            array('Input.Up', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Up&quot;, &quot;id&quot;: 1}'),
-            array('Player.Seek Forward', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Seek&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;value&quot;:&quot;smallforward&quot;},&quot;id&quot;:1}'),
-            array('Player.Seek Backwards', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Seek&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;value&quot;:&quot;smallbackward&quot;},&quot;id&quot;:1}'),
-            array('Player.Stop', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Stop&quot;,&quot;params&quot;:{&quot;playerid&quot;:1},&quot;id&quot;:1}'),
-            array('Player.PlayPause Play', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;play&quot;:true},&quot;id&quot;:1}'),
-            array('Player.PlayPause Pause', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;play&quot;:false},&quot;id&quot;:1}'),
-            array('Player.PlayPause Toggle', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1},&quot;id&quot;:1}'),
-            array('Player.GoTo Next', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.GoTo&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;to&quot;:&quot;next&quot;},&quot;id&quot;:1}'),
-            array('Player.GoTo Previous', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.GoTo&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;to&quot;:&quot;previous&quot;},&quot;id&quot;:1}'),
-            array('Input.executeaction PageDown', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Input.ExecuteAction&quot;,&quot;params&quot;:{&quot;action&quot;:&quot;pagedown&quot;},&quot;id&quot;:1}'),
-            array('Input.executeaction PageUp', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Input.ExecuteAction&quot;,&quot;params&quot;:{&quot;action&quot;:&quot;pageup&quot;},&quot;id&quot;:1}'),
-            array('Application.SetVolume VolumeUp', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetVolume&quot;,&quot;params&quot;:{&quot;volume&quot;:&quot;increment&quot;},&quot;id&quot;:1}'),
-            array('Application.SetVolume VolumeDown', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetVolume&quot;,&quot;params&quot;:{&quot;volume&quot;:&quot;decrement&quot;},&quot;id&quot;:1}'),
-            array('Application.Quit', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.Quit&quot;,&quot;id&quot;:1}'),
-            array('Application.SetMute Toggle', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;id&quot;:1}'),
-            array('Application.SetMute Mute', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;params&quot;:{&quot;mute&quot;:true},&quot;id&quot;:1}'),
-            array('Application.SetMute Unmute', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;params&quot;:{&quot;mute&quot;:false},&quot;id&quot;:1}'),
+            array('Input.Back', 'V_BACK', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Back&quot;, &quot;id&quot;: 1}'),
+            array('Input.ContextMenu', 'V_CONTEXT', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.ContextMenu&quot;, &quot;id&quot;: 1}'),
+            array('Input.Down', 'V_DOWN', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Down&quot;, &quot;id&quot;: 1}'),
+            array('Input.Home', 'V_HOME', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Home&quot;, &quot;id&quot;: 1}'),
+            array('Input.Info', 'V_INFO', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Info&quot;, &quot;id&quot;: 1}'),
+            array('Input.Left', 'V_LEFT', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Left&quot;, &quot;id&quot;: 1}'),
+            array('Input.Right', 'V_RIGHT', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Right&quot;, &quot;id&quot;: 1}'),
+            array('Input.Select', 'V_SELECT', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Select&quot;, &quot;id&quot;: 1}'),
+            array('Input.ShowOSD', 'V_OSD', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.ShowOSD&quot;, &quot;id&quot;: 1}'),
+            array('Input.Up', 'V_UP', '{&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;Input.Up&quot;, &quot;id&quot;: 1}'),
+            array('Player.Seek Forward', 'V_SEEK_VOR', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Seek&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;value&quot;:&quot;smallforward&quot;},&quot;id&quot;:1}'),
+            array('Player.Seek Backwards', 'V_SEEK_ZUR', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Seek&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;value&quot;:&quot;smallbackward&quot;},&quot;id&quot;:1}'),
+            array('Player.Stop', 'V_STOP', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.Stop&quot;,&quot;params&quot;:{&quot;playerid&quot;:1},&quot;id&quot;:1}'),
+            array('Player.PlayPause Play', 'V_PLAY', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;play&quot;:true},&quot;id&quot;:1}'),
+            array('Player.PlayPause Pause', 'V_PAUSE', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;play&quot;:false},&quot;id&quot;:1}'),
+            array('Player.PlayPause Toggle', 'V_PLAYPAUSE', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.PlayPause&quot;,&quot;params&quot;:{&quot;playerid&quot;:1},&quot;id&quot;:1}'),
+            array('Player.GoTo Next', 'V_NEXT', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.GoTo&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;to&quot;:&quot;next&quot;},&quot;id&quot;:1}'),
+            array('Player.GoTo Previous', 'V_PREV', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Player.GoTo&quot;,&quot;params&quot;:{&quot;playerid&quot;:1,&quot;to&quot;:&quot;previous&quot;},&quot;id&quot;:1}'),
+            array('Input.executeaction PageDown', 'V_PAGEDOWN', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Input.ExecuteAction&quot;,&quot;params&quot;:{&quot;action&quot;:&quot;pagedown&quot;},&quot;id&quot;:1}'),
+            array('Input.executeaction PageUp', 'V_PAGEUP', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Input.ExecuteAction&quot;,&quot;params&quot;:{&quot;action&quot;:&quot;pageup&quot;},&quot;id&quot;:1}'),
+            array('Application.SetVolume VolumeUp', 'V_VOL_AUF', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetVolume&quot;,&quot;params&quot;:{&quot;volume&quot;:&quot;increment&quot;},&quot;id&quot;:1}'),
+            array('Application.SetVolume VolumeDown', 'V_VOL_AB', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetVolume&quot;,&quot;params&quot;:{&quot;volume&quot;:&quot;decrement&quot;},&quot;id&quot;:1}'),
+            array('Application.Quit', 'V_QUIT', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.Quit&quot;,&quot;id&quot;:1}'),
+            array('Application.SetMute Toggle', 'V_MUTE_UM', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;id&quot;:1}'),
+            array('Application.SetMute Mute', 'V_MUTE_AN', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;params&quot;:{&quot;mute&quot;:true},&quot;id&quot;:1}'),
+            array('Application.SetMute Unmute', 'V_MUTE_AUS', '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;Application.SetMute&quot;,&quot;params&quot;:{&quot;mute&quot;:false},&quot;id&quot;:1}'),
         );
     }
 }
@@ -1814,15 +1820,22 @@ if (!function_exists('ko_vorlage_vo')) {
         $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
         $o .= '<VirtualOut HintText="" Title="Kodi steuern (LoxBerry-Plugin)" '
             . 'Comment="Erzeugt vom LoxBerry-Plugin Kodi NG (' . date('d.m.Y')
-            . '). JSON-RPC an Kodis TCP-Schnittstelle." Address="tcp://'
+            . '). JSON-RPC an Kodis TCP-Schnittstelle. Loxone Config legt beim '
+            . 'Import neu an und überschreibt nichts - zweimal eingelesen ergibt '
+            . 'doppelte Bausteine." Address="tcp://'
             . htmlspecialchars($host, ENT_QUOTES | ENT_XML1, 'UTF-8')
             . ':9090" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
         $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
         foreach (ko_vo_befehle() as $c) {
             $o .= "\t" . '<VirtualOutCmd Title="'
                 . htmlspecialchars($c[0], ENT_QUOTES | ENT_XML1, 'UTF-8')
-                . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
-            $o .= 'CmdOn="' . $c[1] . '" ';
+                . '" Comment="'
+                /* Der Comment ist der ANZEIGENAME in Loxone Config, nicht die
+                 * Dokumentation (Regeln/07). Bis 1.2.5 stand hier "" - dann
+                 * zeigte Config den Titel, also 'Input.ContextMenu'. */
+                . htmlspecialchars(ko_t('VOBEF.' . $c[1]), ENT_QUOTES | ENT_XML1, 'UTF-8')
+                . '" CmdOnMethod="GET" CmdOffMethod="GET" ';
+            $o .= 'CmdOn="' . $c[2] . '" ';
             $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
             $o .= 'Analog="false" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
         }
