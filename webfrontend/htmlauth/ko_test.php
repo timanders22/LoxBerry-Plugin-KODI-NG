@@ -160,10 +160,11 @@ function ko_themenprobe($senderdatei, $addondatei)
     if ($s === '') {
         return array(-1, sprintf(ko_t('TEST.A_REITER_UNLESBAR'), ko_e(basename($senderdatei))));
     }
-    // Der Block $ko_werte = array( … ); im Statussender.
+    // Der Block $ko_werte = array( … ); im Statussender. Der Schraegstrich
+    // gehoert seit 1.2.7 ins Muster: status/ok ist ein Thema mit Zweig.
     $ist_plugin = array();
     if (preg_match('/\$ko_werte\s*=\s*array\((.*?)\);/s', $s, $m)) {
-        if (preg_match_all('/\'([a-z_]+)\'\s*=>/', $m[1], $y)) { $ist_plugin = $y[1]; }
+        if (preg_match_all('/\'([a-z_\/]+)\'\s*=>/', $m[1], $y)) { $ist_plugin = $y[1]; }
     }
 
     $a = ko_lesen($addondatei);
@@ -294,8 +295,12 @@ function ko_sicherungsprobe()
     $text = ko_sicherung_text();
     list($erg, $mangel) = ko_sicherung_einlesen($text);
     if ($erg === null) {
+        /* Die Eintraege sind in ko_sicherung_einlesen() schon maskiert - ein
+         * zweites ko_e() machte aus "box&haus" auf dem Bildschirm
+         * "box&amp;haus" (bis 1.2.6). index.php gibt dieselbe Liste
+         * ebenfalls ohne zweite Maskierung aus. */
         return array(0, sprintf(ko_t('TEST.A_SICH_ABGELEHNT'),
-            ko_e(implode(' | ', array_slice($mangel, 0, 3)))));
+            implode(' | ', array_slice($mangel, 0, 3))));
     }
     $cfg = ko_config();
     $ab = array();
@@ -309,6 +314,53 @@ function ko_sicherungsprobe()
     }
     return array(1, sprintf(ko_t('TEST.A_SICH_OK'), count(ko_vorgaben()),
         substr_count($text, "\n")));
+}
+
+/**
+ * Geht das Lebenszeichen ohne Retain hinaus - und die Zustaende mit?
+ *
+ * Gemessen wird die WIRKUNG, nicht die Tabelle allein: die Sendefunktion baut
+ * im Trockenlauf ihre Zeilen, und an deren erstem Wort steht, was sie wirklich
+ * taete. Bis 1.2.6 gingen zeitstempel und herzschlag retained hinaus - ein
+ * zurueckbehaltenes Lebenszeichen zeigt nach dem Tod des Senders fuer immer
+ * "lebt" (Regeln/07). Geeicht, indem ein Lebenszeichen-Thema in ko_themen()
+ * auf retain gestellt wird: die Zeile muss rot werden und den Namen nennen.
+ */
+function ko_lebenszeichenprobe()
+{
+    $paare = array();
+    $leben = array();
+    $zustand = array();
+    $widerspruch = array();
+    foreach (ko_themen() as $t) {
+        if ($t['quelle'] !== 'plugin') { continue; }
+        $paare[$t['name']] = 1;
+        if (!empty($t['leben'])) { $leben[] = $t['name']; }
+        if (!empty($t['retain'])) { $zustand[] = $t['name']; }
+        // Ein Lebenszeichen, das in der Tabelle retained steht, ist schon
+        // dort der Fehler - nicht erst in der gesendeten Zeile.
+        if (!empty($t['leben']) && !empty($t['retain'])) { $widerspruch[] = $t['name']; }
+    }
+    if (!$leben) { return array(0, ko_t('TEST.A_LEBEN_KEINS')); }
+    if ($widerspruch) {
+        return array(0, sprintf(ko_t('TEST.A_LEBEN_FALSCH'), ko_e(implode(', ', $widerspruch))));
+    }
+    list(, , , $zeilen) = ko_mqtt_publish($paare, true);
+    if (!$zeilen) { return array(0, ko_t('TEST.A_LEBEN_NICHTS')); }
+    $cfg = ko_config();
+    $praefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
+    $falsch = array();
+    foreach ($zeilen as $z) {
+        $w = explode(' ', $z, 3);
+        if (count($w) < 2) { continue; }
+        $name = substr($w[1], strlen($praefix) + 1);
+        if (in_array($name, $leben, true) && $w[0] !== 'publish') { $falsch[] = $name . ' (' . $w[0] . ')'; }
+        if (in_array($name, $zustand, true) && $w[0] !== 'retain') { $falsch[] = $name . ' (' . $w[0] . ')'; }
+    }
+    if ($falsch) {
+        return array(0, sprintf(ko_t('TEST.A_LEBEN_FALSCH'), ko_e(implode(', ', array_unique($falsch)))));
+    }
+    return array(1, sprintf(ko_t('TEST.A_LEBEN_OK'), ko_e(implode(', ', $leben)), count($zustand), count($zeilen)));
 }
 
 /* ================================================================
@@ -359,6 +411,33 @@ function ko_pruefungen(array $reiter, $indexdatei)
                 '<span class="sm-mono">' . ko_e($kp['exec']) . '</span>'));
     }
 
+    /* --- Ist die Unit bei systemd angekommen?
+     *     Bis 1.2.6 las das Plugin nur seine Paketkopie. Auf einem echten
+     *     LoxBerry (und nur dort ist die Frage beantwortbar) ist eine fehlende
+     *     /etc/systemd/system/kodi_ng.service ein Kreuz: dann gibt es keinen
+     *     Dienst, den man starten koennte. */
+    if (DIRECTORY_SEPARATOR === '/' && $p['home'] !== '') {
+        if ($kp['unit'] === 'eingespielt') {
+            $z[] = ko_pruefzeile(1, ko_t('TEST.F_UNIT'), ko_t('TEST.A_UNIT_OK'));
+        } else {
+            $z[] = ko_pruefzeile(0, ko_t('TEST.F_UNIT'), ko_t('TEST.A_UNIT_FEHLT'));
+        }
+    }
+
+    /* --- Kann Kodi hier ueberhaupt ein Bild erzeugen?
+     *     Gemessen am 17.09.2026: ohne /dev/dri startet Kodi 21 nicht und
+     *     beendet sich nach drei Abstuerzen - die Oberflaeche sagte nur
+     *     "gestoppt". Das Plugin schaltet den Treiber nicht selbst ein. */
+    $bild = ko_bildausgabe();
+    if ($bild['stand'] === -1) {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_BILD'), ko_t('TEST.A_BILD_UNBEKANNT'));
+    } elseif ($bild['stand'] === 1) {
+        $z[] = ko_pruefzeile(1, ko_t('TEST.F_BILD'),
+            sprintf(ko_t('TEST.A_BILD_OK'), '<span class="sm-mono">' . ko_e(implode(', ', $bild['geraete'])) . '</span>'));
+    } else {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_BILD'), ko_t('TEST.A_BILD_NEIN'));
+    }
+
     /* --- Kodis eigene Fernsteuerung. Sie ist die Voraussetzung fuer die
      *     Weboberflaeche UND fuer JSON-RPC; das Plugin schaltet sie beim
      *     Einspielen selbst ein. Bis 1.2.1 fragte niemand nach, ob das noch
@@ -395,11 +474,32 @@ function ko_pruefungen(array $reiter, $indexdatei)
          * Gruppenrechte und die GPU-Einstellung erst nach einem Neustart
          * greifen. Gefragt am 29.08.2026, weil es nirgends stand. */
         $nach_neustart = !$laeuft && !$ohne_programm && !empty($st['kodiautostart']);
-        $z[] = ko_pruefzeile($laeuft ? 1 : 0, ko_t('TEST.F_DIENST'),
-            $laeuft ? ko_t('TEST.A_DIENST_LAEUFT')
-                    : ($ohne_programm ? ko_t('TEST.A_DIENST_OHNE_PROGRAMM')
-                        : ($nach_neustart ? ko_t('TEST.A_DIENST_NACH_NEUSTART')
-                                          : ko_t('TEST.A_DIENST_GESTOPPT'))));
+        /* ABGESTUERZT ist etwas anderes als GESTOPPT. systemd sagt es:
+         * ActiveState failed, oder Result nicht success. Bis 1.2.6 kannte
+         * diese Zeile nur "gestoppt" - gemessen am 17.09.2026 stand Kodi seit
+         * einer Woche nach drei Abstuerzen still, und hier stand, es warte
+         * auf den naechsten Neustart. */
+        $dl = ko_dienst_lage();
+        $abgestuerzt = !$laeuft && !$ohne_programm && $dl !== null
+            && ($dl['aktiv'] === 'failed' || ($dl['ergebnis'] !== '' && $dl['ergebnis'] !== 'success'));
+        if ($abgestuerzt) {
+            $antwort = sprintf(ko_t('TEST.A_DIENST_ABGESTUERZT'),
+                '<span class="sm-mono">' . ko_e($dl['ergebnis']) . '</span>',
+                '<span class="sm-mono">' . ko_e($dl['status']) . '</span>',
+                ko_e($dl['seit']));
+            if ($bild['stand'] === 0) { $antwort .= ' ' . ko_t('TEST.A_DIENST_WEGEN_BILD'); }
+        } elseif ($laeuft) {
+            $antwort = ko_t('TEST.A_DIENST_LAEUFT');
+        } elseif ($ohne_programm) {
+            $antwort = ko_t('TEST.A_DIENST_OHNE_PROGRAMM');
+        } elseif ($bild['stand'] === 0) {
+            $antwort = ko_t('TEST.A_DIENST_OHNE_BILD');
+        } elseif ($nach_neustart) {
+            $antwort = ko_t('TEST.A_DIENST_NACH_NEUSTART');
+        } else {
+            $antwort = ko_t('TEST.A_DIENST_GESTOPPT');
+        }
+        $z[] = ko_pruefzeile($laeuft ? 1 : 0, ko_t('TEST.F_DIENST'), $antwort);
         $auto = !empty($st['kodiautostart']);
         // Autostart aus ist eine ENTSCHEIDUNG des Anwenders, kein Mangel -
         // deshalb ein Strich und kein Kreuz.
@@ -446,6 +546,9 @@ function ko_pruefungen(array $reiter, $indexdatei)
         $z[] = ko_pruefzeile(1, ko_t('TEST.F_CRON'),
             sprintf(ko_t('TEST.A_CRON_OK'), '<span class="sm-mono">' . ko_e($cpfad) . '</span>')
             . ($creste ? ' ' . sprintf(ko_t('TEST.A_CRON_RESTE'), ko_e(implode(', ', $creste))) : ''));
+    } elseif ($cstand === 2) {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_CRON'),
+            sprintf(ko_t('TEST.A_CRON_NICHT_AUSFUEHRBAR'), '<span class="sm-mono">' . ko_e($cpfad) . '</span>'));
     } elseif ($cpfad !== '') {
         $z[] = ko_pruefzeile(0, ko_t('TEST.F_CRON'),
             sprintf(ko_t('TEST.A_CRON_VERZEICHNIS'), '<span class="sm-mono">' . ko_e($cpfad) . '</span>'));
@@ -458,19 +561,38 @@ function ko_pruefungen(array $reiter, $indexdatei)
     /* --- Der Statussender: ist er an, und hat er zugestellt?
      *     Ueber einen Sender, der gar nicht laufen soll, wird kein Herzschlag
      *     beurteilt - das gaebe ein Kreuz, das nichts bedeutet. */
+    /* Bis 1.2.6 genuegte ein junger gesendet_ts fuer den Haken - und der
+     * wurde geschrieben, sobald EIN Wert hinausging. Jetzt zaehlt der letzte
+     * volle Lauf: Helfer geantwortet UND alle Zeilen uebergeben (ok = 1). */
     $zu = ko_json_lesen($p['zustand']);
+    $senderzahl = ko_themen_plugin_zahl($cfg);
     if ((string) $cfg['sender_ein'] !== '1') {
-        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_SENDER'), ko_t('TEST.A_SENDER_AUS'));
-    } elseif (!isset($zu['gesendet_ts'])) {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_SENDER'), sprintf(ko_t('TEST.A_SENDER_AUS'), $senderzahl));
+    } elseif (!isset($zu['versuch_ts']) && !isset($zu['gesendet_ts'])) {
         $z[] = ko_pruefzeile(0, ko_t('TEST.F_SENDER'), ko_t('TEST.A_SENDER_NIE'));
     } else {
-        $alter = time() - (int) $zu['gesendet_ts'];
-        // Zwei Takte Luft: ein einzelner uebersprungener Lauf ist kein Defekt.
         $grenze = 2 * max(60, (int) $cfg['sender_takt']) + 60;
-        $z[] = ko_pruefzeile($alter <= $grenze ? 1 : 0, ko_t('TEST.F_SENDER'),
-            sprintf($alter <= $grenze ? ko_t('TEST.A_SENDER_OK') : ko_t('TEST.A_SENDER_ALT'),
-                (int) $alter, (int) $grenze,
-                isset($zu['herzschlag']) ? (int) $zu['herzschlag'] : 0));
+        $ok = isset($zu['ok']) ? (int) $zu['ok'] : (isset($zu['gesendet_ts']) ? 1 : 0);
+        $alter_ok = isset($zu['gesendet_ts']) ? time() - (int) $zu['gesendet_ts'] : -1;
+        /* Auch der Fehler zaehlt: ok und gesendet_ts schreibt nur ein
+         * faelliger Lauf, fehler jeder. Ohne diese Bedingung blieb die Zeile
+         * nach einer Stoerung zwischen zwei Takten bis zu sender_takt gruen
+         * (gegengelesen 17.09.2026). */
+        $fehler_jetzt = isset($zu['fehler']) && (string) $zu['fehler'] !== '';
+        if ($ok === 1 && !$fehler_jetzt && $alter_ok >= 0 && $alter_ok <= $grenze) {
+            $z[] = ko_pruefzeile(1, ko_t('TEST.F_SENDER'),
+                sprintf(ko_t('TEST.A_SENDER_OK'), (int) $alter_ok, (int) $grenze,
+                    isset($zu['anzahl']) ? (int) $zu['anzahl'] : 0,
+                    isset($zu['erwartet']) ? (int) $zu['erwartet'] : 0,
+                    isset($zu['herzschlag']) ? (int) $zu['herzschlag'] : 0));
+        } else {
+            $z[] = ko_pruefzeile(0, ko_t('TEST.F_SENDER'),
+                sprintf(ko_t('TEST.A_SENDER_GESTOERT'),
+                    ko_e(isset($zu['fehler']) && $zu['fehler'] !== '' ? $zu['fehler'] : '-'),
+                    $alter_ok >= 0 ? sprintf(ko_t('TEST.VOR_S'), (int) $alter_ok) : ko_t('TEST.NOCH_NIE'),
+                    (int) $grenze,
+                    isset($zu['herzschlag']) ? (int) $zu['herzschlag'] : 0));
+        }
     }
 
     /* --- Die Lage der Konfiguration. Vier Zustaende, vier Saetze - ein
@@ -559,6 +681,9 @@ function ko_pruefungen(array $reiter, $indexdatei)
     list($s, $t) = ko_themenprobe($p['bin'] . '/kodi_ng_status.php', ko_addon_quelle());
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_THEMEN'), $t);
 
+    list($s, $t) = ko_lebenszeichenprobe();
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_LEBEN'), $t);
+
     list($s, $t) = ko_abosatzprobe();
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_ABOSATZ'), $t);
 
@@ -640,7 +765,10 @@ function ko_test_aktion($was)
 
         case 'addonzeigen':
             $roh = ko_helper('action=addonread');
-            $j = json_decode($roh, true);
+            // Ab der ersten geschweiften Klammer lesen - ein Kopfblock davor
+            // liess json_decode bis 1.2.6 scheitern (siehe ko_helper_json).
+            $ko_klammer = strpos($roh, '{');
+            $j = $ko_klammer === false ? null : json_decode(substr($roh, $ko_klammer), true);
             if (!is_array($j) || empty($j['status']) || $j['status'] !== 'OK') {
                 return array(ko_t('TEST.K_ADDONZEIGEN'),
                     ko_e(ko_t('TEST.A_ADDON_KEINE_DATEI') . "\n\n" . $roh));

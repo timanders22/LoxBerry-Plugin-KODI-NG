@@ -3,7 +3,8 @@
     <category label="32000">
       <setting label="32001" type="ipaddress" id="udp_address"/>
       <setting label="32002" type="number" id="udp_port" default="7000"/>
-      <setting label="32003" type="slider" id="volume_on_start" default="90" range="5,5,100" option="percent" />
+      <setting label="32004" type="lsep"/>
+      <setting label="32003" type="slider" id="volume_on_start" default="90" range="0,5,100" option="percent" />
     </category>
     <category label="32010">
       <setting label="32011" type="bool" id="mqtt_enable" default="true"/>

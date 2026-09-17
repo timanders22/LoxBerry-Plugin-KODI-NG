@@ -24,6 +24,16 @@
 
 SKRIPT="REPLACELBPBINDIR/kodi_ng_status.php"
 CFG="REPLACELBPCONFIGDIR/kodi.json"
+LOGDATEI="REPLACELBPLOGDIR/kodi.log"
+
+# Gibt es noch gar keine Konfiguration, ist der Sender aus - das ist seine
+# Vorgabe. Bis 1.2.6 lief dann trotzdem jede Minute ein PHP-Prozess an, nur um
+# festzustellen, dass nichts zu tun ist: 1440 Starts am Tag auf jedem
+# LoxBerry, auf dem die Oberflaeche nie gespeichert wurde. Gemessen am Geraet
+# des Hauses am 17.09.2026: dort gab es keine kodi.json.
+if [ ! -f "$CFG" ]; then
+    exit 0
+fi
 
 # Ist der Sender ausgeschaltet, braucht es gar keinen PHP-Prozess.
 #
@@ -32,7 +42,7 @@ CFG="REPLACELBPCONFIGDIR/kodi.json"
 # aus 1.1.9 stammt -, findet grep nichts, und der Lauf geht weiter zum
 # Skript, das die Frage richtig beantwortet. Ein Muster, das versehentlich
 # nirgends passt, haelt hier also nichts an.
-if [ -f "$CFG" ] && grep -q '"sender_ein"[[:space:]]*:[[:space:]]*"0"' "$CFG"; then
+if grep -q '"sender_ein"[[:space:]]*:[[:space:]]*"0"' "$CFG"; then
     exit 0
 fi
 
@@ -54,6 +64,14 @@ if [ -z "$PHP" ]; then
     exit 1
 fi
 
-# Die Ausgabe wird NICHT nach /dev/null geleitet. Im Normalfall schweigt das
-# Skript; was es sagt, ist eine Stoerung und gehoert in den Systemlogger.
+# Die Fehlerausgabe gehoert in die Protokolldatei des Plugins (Regeln/03).
+# Bis 1.2.6 stand hier, sie lande im Systemlogger - sie landete nirgends:
+# cron verschickt Ausgaben per Mail, und ohne Mailserver (der Regelfall auf
+# einem LoxBerry, gemessen 17.09.2026) wirft er sie weg. Das Skript selbst
+# schreibt seine Stoerungen gebremst mit Zeitstempel in dieselbe Datei; hier
+# kommt nur an, was PHP selbst sagt, bevor das Skript das kann (etwa ein
+# Syntaxfehler). Die normale Ausgabe ist leer.
+if [ -d "$(dirname "$LOGDATEI")" ]; then
+    exec "$PHP" "$SKRIPT" 2>>"$LOGDATEI"
+fi
 exec "$PHP" "$SKRIPT"

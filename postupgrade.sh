@@ -8,11 +8,61 @@ ARGV5=$5
 # Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
 LBHOMEDIR="${LBHOMEDIR:-$5}"
 
-BASE="${ARGV5:-$LBHOMEDIR}"
+# DIE WURZEL WIRD GEPRUEFT, NICHT GEGLAUBT - dieselbe Pruefung wie in
+# preupgrade.sh (dort begruendet).
+#
+# Bis 1.2.7 stand hier nur BASE="${ARGV5:-$LBHOMEDIR}". War beides leer,
+# suchte das Skript die Sicherung unter "/data/plugins/...", fand nichts,
+# meldete beruhigend "nichts zurueckzustellen" und "Update abgeschlossen" -
+# und die Konfiguration war weg.
+#
+# Findet sich keine Wurzel, wird NICHTS zurueckgespielt und NICHTS geloescht,
+# und das Skript endet mit Rueckgabewert 1. Nicht mit 2: an dieser Stelle hat
+# der Installer die alte Fassung schon entfernt, ein Abbruch verhinderte nur
+# noch postroot.sh (Unit, udev-Regeln). Mit 1 laeuft die Installation weiter
+# und fuehrt die Zeile in ihrer Fehlerliste und als Benachrichtigung
+# (sbin/plugininstall.pl, LoxBerry 4.0.0.15, Zeilen 1329-1350).
+ko_ist_loxberry() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] \
+        && [ -f "$1/config/system/general.json" ]
+}
+ko_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if ko_ist_loxberry "$v"; then
+            echo "$v"
+            return 0
+        fi
+        v=$(dirname "$v")
+        i=$((i + 1))
+    done
+    return 1
+}
+BASE=""
+for KO_KAND in "$ARGV5" "$LBHOMEDIR"; do
+    if ko_ist_loxberry "$KO_KAND"; then
+        BASE="$KO_KAND"
+        break
+    fi
+done
+if [ -z "$BASE" ]; then
+    BASE=$(ko_wurzel_suchen)
+fi
 # Der Rueckfall hiess bis 1.1.9 "kodi" - der Ordnername VOR der
 # Umbenennung auf kodi_ng. Griff er, sicherte bzw. suchte dieses
 # Skript in einem Verzeichnis, das es nicht mehr gibt.
 PDIR="${ARGV3:-kodi_ng}"
+if [ -z "$BASE" ]; then
+    echo "<FAIL> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln (fuenftes"
+    echo "<FAIL> Argument: '$ARGV5', LBHOMEDIR: '$LBHOMEDIR', Suche ab dem Ablageort"
+    echo "<FAIL> dieses Skripts ohne Treffer). Die gesicherte Konfiguration von Kodi NG"
+    echo "<FAIL> wurde deshalb NICHT zurueckgespielt und auch nicht geloescht. Sie liegt,"
+    echo "<FAIL> sofern preupgrade.sh sie anlegen konnte, unter"
+    echo "<FAIL>   <LoxBerry>/data/plugins/$PDIR.upgrade_sicherung/config/"
+    echo "<FAIL> und gehoert von Hand nach <LoxBerry>/config/plugins/$PDIR/ kopiert."
+    exit 1
+fi
 SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 
 mkdir -p "$BASE/config/plugins/$PDIR" 2>/dev/null
@@ -24,8 +74,19 @@ if [ ! -d "$SICHER/config" ] && [ -d "/tmp/${ARGV1}_upgrade/config" ]; then
 fi
 
 if [ -d "$SICHER/config" ] && [ -n "$(ls -A "$SICHER/config" 2>/dev/null)" ]; then
-    cp -a "$SICHER/config/." "$BASE/config/plugins/$PDIR/" 2>/dev/null
-    echo "<OK> Konfiguration zurueckgestellt."
+    # Erst pruefen, dann die Sicherung loeschen. Bis 1.2.7 hiess es
+    # "zurueckgestellt", auch wenn cp scheiterte - und danach war die
+    # Sicherung weg. Jetzt bleibt sie in diesem Fall liegen.
+    if cp -a "$SICHER/config/." "$BASE/config/plugins/$PDIR/" \
+       && diff -r "$SICHER/config" "$BASE/config/plugins/$PDIR" >/dev/null 2>&1; then
+        echo "<OK> Konfiguration zurueckgestellt."
+    else
+        echo "<FAIL> Die Konfiguration liess sich NICHT vollstaendig zurueckstellen."
+        echo "<FAIL> Die Sicherung bleibt unter $SICHER/config liegen;"
+        echo "<FAIL> bitte von Hand nach $BASE/config/plugins/$PDIR/ kopieren."
+        chown -R loxberry:loxberry "$BASE/config/plugins/$PDIR" 2>/dev/null
+        exit 1
+    fi
 else
     echo "<INFO> Keine gesicherte Konfiguration gefunden - nichts zurueckzustellen."
 fi

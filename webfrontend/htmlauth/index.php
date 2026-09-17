@@ -80,9 +80,11 @@ $ko_tab = 'tab-settings';
 if (isset($_POST['activetab']) && is_string($_POST['activetab'])
     && in_array($_POST['activetab'], $ko_reiter, true)) {
     $ko_tab = (string) $_POST['activetab'];
-} elseif (isset($_GET['form'])
-          && in_array('tab-' . (string) $_GET['form'], $ko_reiter, true)) {
-    $ko_tab = 'tab-' . (string) $_GET['form'];
+} elseif (isset($_GET['form']) && is_string($_GET['form'])
+          && in_array('tab-' . $_GET['form'], $ko_reiter, true)) {
+    // is_string auch hier - bis 1.2.6 fehlte es genau in diesem Zweig, und
+    // index.php?form[]=x schrieb unter PHP 8.4 bei jedem Aufruf eine Warnung.
+    $ko_tab = 'tab-' . $_GET['form'];
 }
 
 /** Klasse fuer den gerade sichtbaren Reiter bzw. Bereich. */
@@ -100,6 +102,26 @@ function ko_aktiv($id) { global $ko_tab; return $ko_tab === $id ? ' sm-active' :
 function ko_ist_post()
 {
     return isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST';
+}
+
+/** Einen Schluessel ueber den Helfer setzen - und die ANTWORT lesen.
+ *
+ *  Bis 1.2.6 wurde sie an allen vier action=change-Stellen verworfen. Der
+ *  Helfer antwortet seit 1.2.0 ausdruecklich mit "Error", wenn das Schreiben
+ *  scheitert - genau damit die Oberflaeche nicht mehr "eingeschaltet" meldet,
+ *  was nicht eingeschaltet ist. Die Falle stand eine Ebene hoeher noch da:
+ *  bei nicht schreibbarer config.txt zeigte die Seite "Gespeichert", und ins
+ *  Protokoll ging "Lizenzschluessel gesetzt".
+ *
+ *  Rueckgabe: '' bei Erfolg, sonst der Grund. */
+function ko_helfer_setzen($schluessel, $wert)
+{
+    $j = ko_helper_json('action=change key=' . escapeshellarg((string) $schluessel)
+        . ' value=' . escapeshellarg((string) $wert));
+    if (!is_array($j)) { return ko_t('MELDUNG.HELFER_STUMM'); }
+    if (isset($j['status']) && $j['status'] === 'OK') { return ''; }
+    return isset($j['reason']) ? (string) $j['reason']
+        : (isset($j['status']) ? (string) $j['status'] : '?');
 }
 
 $ko_saved = false;
@@ -203,12 +225,18 @@ if (ko_ist_post()) {
                     ko_config(true);
                     $ko_meldungen[] = sprintf(ko_t('SICH.U_KONFIG'), count($ko_neu['cfg']));
 
-                    /* Autostart nachziehen. */
+                    /* Autostart nachziehen - und die Antwort lesen. */
                     if ($ko_neu['autostart'] !== null) {
-                        ko_helper('action=change key=kodiautostart value=' . (int) $ko_neu['autostart']);
-                        $ko_meldungen[] = sprintf(ko_t('SICH.U_AUTOSTART'),
-                            $ko_neu['autostart'] ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'));
+                        $ko_grund = ko_helfer_setzen('kodiautostart', (int) $ko_neu['autostart']);
+                        $ko_meldungen[] = $ko_grund === ''
+                            ? sprintf(ko_t('SICH.U_AUTOSTART'),
+                                $ko_neu['autostart'] ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'))
+                            : sprintf(ko_t('SICH.U_AUTOSTART_FEHL'), ko_e($ko_grund));
                     }
+                    /* Und sagen, was mit dem Statussender geschah - er liest
+                     * die Konfiguration beim naechsten Cron-Durchgang. */
+                    $ko_meldungen[] = sprintf(ko_t('SICH.U_SENDER'),
+                        (string) ko_config()['sender_ein'] === '1' ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'));
 
                     /* Die Addon-Felder. Sie lassen sich nur schreiben, wenn
                      * Kodi steht - sonst schreibt Kodi beim Beenden seine
@@ -224,7 +252,9 @@ if (ko_ist_post()) {
                             foreach ($ko_neu['addon'] as $ko_k => $ko_v) {
                                 $ko_args[] = escapeshellarg('a_' . $ko_k . '=' . rawurlencode($ko_v));
                             }
-                            $ko_a = json_decode(ko_helper(implode(' ', $ko_args)), true);
+                            // ko_helper_json schneidet einen Kopfblock ab; bis
+                            // 1.2.6 scheiterte json_decode hier an "Status: 200".
+                            $ko_a = ko_helper_json(implode(' ', $ko_args));
                             $ko_meldungen[] = (is_array($ko_a) && isset($ko_a['status']) && $ko_a['status'] === 'OK')
                                 ? sprintf(ko_t('SICH.U_ADDON'), count($ko_neu['addon']))
                                 : sprintf(ko_t('SICH.U_ADDON_FEHL'),
@@ -256,9 +286,13 @@ if (ko_ist_post()) {
                                 foreach (array('lizenz_mpeg2' => 'licmpeg2', 'lizenz_vc1' => 'licvc1')
                                          as $ko_q => $ko_key) {
                                     if (!isset($ko_neu['lizenz'][$ko_q])) { continue; }
-                                    ko_helper('action=change key=' . escapeshellarg($ko_key)
-                                        . ' value=' . escapeshellarg($ko_neu['lizenz'][$ko_q]));
-                                    $ko_gesetzt++;
+                                    $ko_grund = ko_helfer_setzen($ko_key, $ko_neu['lizenz'][$ko_q]);
+                                    // Gezaehlt wird, was GELANG, nicht was versucht wurde.
+                                    if ($ko_grund === '') { $ko_gesetzt++; }
+                                    else {
+                                        $ko_meldungen[] = sprintf(ko_t('SICH.U_LIZENZ_FEHL'),
+                                            ko_e($ko_key), ko_e($ko_grund));
+                                    }
                                 }
                                 // Dieselbe Klasse wie im Speichern-Zweig: eben
                                 // geschaltet, also den Zustand frisch holen.
@@ -281,8 +315,7 @@ if (ko_ist_post()) {
         $ko_mangel = array();
         /* Beanstandungen melden, nicht das ganze Speichern verhindern: was
          * durchgeht, wird uebernommen, und der Anwender sieht, was nicht. */
-        foreach (array('kodi_host', 'kodi_port', 'kodi_user', 'kodi_pass',
-                       'sender_takt') as $ko_k) {
+        foreach (array('kodi_host', 'kodi_port', 'kodi_user') as $ko_k) {
             if (!isset($_POST[$ko_k]) || !is_string($_POST[$ko_k])) { continue; }
             $ko_v = ko_wert_pruefen($ko_k, $_POST[$ko_k]);
             if ($ko_v === null) {
@@ -292,11 +325,29 @@ if (ko_ist_post()) {
             }
             $ko_cfg[$ko_k] = $ko_v;
         }
+        /* DAS PASSWORT: ein leeres Feld loescht nichts (Regeln/04, 05).
+         *
+         * Der Browser fuellt type=password nicht vor - und seit 1.2.7 steht
+         * das gespeicherte Passwort auch nicht mehr im Quelltext der Seite.
+         * Bis 1.2.6 hiess "nur den Benutzernamen aendern und speichern":
+         * Passwort geloescht. Geloescht wird jetzt ueber den Haken daneben. */
+        if (!empty($_POST['kodi_pass_loeschen'])) {
+            $ko_cfg['kodi_pass'] = '';
+        } elseif (isset($_POST['kodi_pass']) && is_string($_POST['kodi_pass'])
+                  && $_POST['kodi_pass'] !== '') {
+            $ko_v = ko_wert_pruefen('kodi_pass', $_POST['kodi_pass']);
+            if ($ko_v === null || $ko_v === '') {
+                $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), 'kodi_pass', '***');
+            } else {
+                $ko_cfg['kodi_pass'] = $ko_v;
+            }
+        }
         /* Haken: ein nicht angehaktes Kaestchen kommt gar nicht mit. Das ist
          * kein "unveraendert", sondern eine 0 - aber nur, wenn das Formular
          * ueberhaupt dieses Feld fuehrt. Deshalb der versteckte Begleiter
-         * hat_<name>, der immer mitkommt. */
-        foreach (array('sender_ein', 'rpc_ein') as $ko_k) {
+         * hat_<name>, der immer mitkommt. Der Statussender steht seit 1.2.7
+         * im Reiter MQTT und hat dort seinen eigenen Handler. */
+        foreach (array('rpc_ein') as $ko_k) {
             if (empty($_POST['hat_' . $ko_k])) { continue; }
             $ko_cfg[$ko_k] = empty($_POST[$ko_k]) ? '0' : '1';
         }
@@ -312,14 +363,26 @@ if (ko_ist_post()) {
                 $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_key), ko_e(substr($ko_lneu, 0, 40)));
                 continue;
             }
-            ko_helper('action=change key=' . escapeshellarg($ko_key)
-                . ' value=' . escapeshellarg($ko_lneu));
-            ko_log('Lizenzschluessel ' . $ko_key . ' gesetzt.');
+            $ko_grund = ko_helfer_setzen($ko_key, $ko_lneu);
+            if ($ko_grund === '') {
+                ko_log('Lizenzschluessel ' . $ko_key . ' gesetzt.');
+            } else {
+                $ko_mangel[] = sprintf(ko_t('MELDUNG.HELFER_ABGELEHNT'), ko_e($ko_key), ko_e($ko_grund));
+                ko_log('Lizenzschluessel ' . $ko_key . ' NICHT gesetzt: ' . $ko_grund);
+            }
         }
 
         if (isset($_POST['hat_kodiautostart'])) {
-            ko_helper('action=change key=kodiautostart value='
-                . (empty($_POST['kodiautostart']) ? '0' : '1'));
+            $ko_soll_auto = empty($_POST['kodiautostart']) ? '0' : '1';
+            // Nur schalten, wenn sich etwas aendert - und die Antwort lesen.
+            $ko_ist_auto = ko_status();
+            if (!isset($ko_ist_auto['kodiautostart'])
+                || (string) (int) $ko_ist_auto['kodiautostart'] !== $ko_soll_auto) {
+                $ko_grund = ko_helfer_setzen('kodiautostart', $ko_soll_auto);
+                if ($ko_grund !== '') {
+                    $ko_mangel[] = sprintf(ko_t('MELDUNG.HELFER_ABGELEHNT'), 'kodiautostart', ko_e($ko_grund));
+                }
+            }
         }
 
         /* DEN ZUSTAND FRISCH HOLEN.
@@ -345,23 +408,34 @@ if (ko_ist_post()) {
 
     /* ============ MQTT speichern ============ */
     if (isset($_POST['mqtt_save'])) {
+        /* Seit 1.2.7 fuehrt dieses Formular ALLE MQTT-Einstellungen: Thema,
+         * Statussender und seinen Takt (Regeln/04, "MQTT wohnt vollstaendig
+         * im Reiter MQTT"). Bis 1.2.6 standen Sender und Takt im Reiter
+         * Einstellungen. Beanstandungen melden, nicht alles verhindern: was
+         * durchgeht, wird uebernommen. */
         $ko_cfg = ko_config();
-        $ko_v = isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic'])
-            ? ko_wert_pruefen('mqtt_topic', $_POST['mqtt_topic']) : null;
-        if ($ko_v === null) {
-            $ko_gezeigt = (isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic']))
-                ? substr($_POST['mqtt_topic'], 0, 40) : '';
-            $ko_beanstandungen[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), 'mqtt_topic',
-                ko_e($ko_gezeigt));
-        } else {
-            $ko_cfg['mqtt_topic'] = $ko_v;
-            if (ko_config_schreiben($ko_cfg)) {
-                $ko_saved = true;
-                ko_config(true);
-            } else {
-                $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
+        $ko_mangel = array();
+        foreach (array('mqtt_topic', 'sender_takt') as $ko_k) {
+            if (!isset($_POST[$ko_k])) { continue; }
+            $ko_v = is_string($_POST[$ko_k]) ? ko_wert_pruefen($ko_k, $_POST[$ko_k]) : null;
+            if ($ko_v === null) {
+                $ko_gezeigt = is_string($_POST[$ko_k]) ? substr($_POST[$ko_k], 0, 40) : '';
+                $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_k), ko_e($ko_gezeigt));
+                continue;
             }
+            $ko_cfg[$ko_k] = $ko_v;
         }
+        if (!empty($_POST['hat_sender_ein'])) {
+            $ko_cfg['sender_ein'] = empty($_POST['sender_ein']) ? '0' : '1';
+        }
+        if (ko_config_schreiben($ko_cfg)) {
+            $ko_saved = true;
+            ko_config(true);
+            ko_log('MQTT-Einstellungen gespeichert (Statussender ' . $ko_cfg['sender_ein'] . ').');
+        } else {
+            $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
+        }
+        if ($ko_mangel) { $ko_beanstandungen = $ko_mangel; }
         $ko_tab = 'tab-mqtt';
     }
 
@@ -389,7 +463,12 @@ if (ko_ist_post()) {
                 foreach ($ko_soll as $ko_k => $ko_v) {
                     $ko_args[] = escapeshellarg('a_' . $ko_k . '=' . rawurlencode($ko_v));
                 }
-                $ko_a = json_decode(ko_helper(implode(' ', $ko_args)), true);
+                /* ko_helper_json, nicht json_decode(ko_helper()): unter sudo
+                 * schrieb der Helfer bis 1.2.6 "Status: 200 OK" und
+                 * Content-Type VOR das JSON (gemessen am Geraet 17.09.2026),
+                 * json_decode lieferte null, und dieser Knopf meldete immer
+                 * einen Fehler - auch wenn geschrieben war. */
+                $ko_a = ko_helper_json(implode(' ', $ko_args));
                 $ko_ok = is_array($ko_a) && isset($ko_a['status']) && $ko_a['status'] === 'OK';
                 /* Und die WIRKUNG messen, nicht den Rueckgabewert glauben:
                  * gleich noch einmal lesen und vergleichen. */
@@ -429,28 +508,38 @@ if (ko_ist_post()) {
             ko_helper('action=service key=kodi value=' . $ko_was);
             ko_log('Dienst: ' . $ko_was);
             /* Nicht der Rueckmeldung des Klicks glauben - nachsehen, was der
-             * Dienst danach WIRKLICH tut. */
+             * Dienst danach WIRKLICH tut. Kodi stuerzt ohne Grafiktreiber
+             * erst nach ein, zwei Sekunden ab; deshalb kurz warten, bevor
+             * gemessen wird - sonst steht "laeuft" da, und eine Minute spaeter
+             * ist es falsch. */
+            if ($ko_was !== 'stop') { sleep(3); }
             $ko_st = ko_status(true);
+            $ko_dl = ko_dienst_lage(true);
             $ko_note = sprintf(ko_t('MELDUNG.BEFEHL_GESCHICKT'), '<b>' . ko_e($ko_was) . '</b>',
-                '<b>' . (!empty($ko_st['kodistarted']) ? ko_t('ALLG.LAEUFT')
-                    : (ko_kodi_paket()['datei'] === false && ko_kodi_paket()['exec'] !== ''
-                        ? ko_t('ALLG.NICHT_INSTALLIERT') : ko_t('ALLG.GESTOPPT'))) . '</b>');
+                '<b>' . ko_e(ko_dienst_text($ko_st, $ko_dl)) . '</b>');
         }
-        $ko_tab = 'tab-test';
+        $ko_tab = 'tab-settings';
     }
 
     /* ============ Test-Ereignis an MQTT ============ */
     if (isset($_POST['mqtttest'])) {
         $ko_st = ko_status();
-        list($ko_n, $ko_meldung) = ko_mqtt_publish(array(
+        list($ko_n, $ko_meldung, $ko_versucht) = ko_mqtt_publish(array(
             'dienst'      => isset($ko_st['kodistarted']) ? (int) $ko_st['kodistarted'] : null,
             'autostart'   => isset($ko_st['kodiautostart']) ? (int) $ko_st['kodiautostart'] : null,
             'zeitstempel' => time(),
         ));
-        $ko_note = $ko_n > 0
-            ? sprintf(ko_t('MELDUNG.MQTT_GESENDET'), $ko_n,
-                '<span class="sm-mono">' . ko_e(ko_config()['mqtt_topic']) . '/</span>')
-            : ko_t('MELDUNG.MQTT_NICHT_GESENDET');
+        /* Die Meldung nennt den WIRKLICHEN Grund. Bis 1.2.6 wurde er
+         * verworfen, und der Text behauptete immer "UDP-Eingang nicht
+         * gesetzt" - auch wenn der gesetzt war und nur der Socket scheiterte. */
+        if ($ko_n > 0 && $ko_n === $ko_versucht) {
+            $ko_note = sprintf(ko_t('MELDUNG.MQTT_GESENDET'), $ko_n,
+                '<span class="sm-mono">' . ko_e(ko_config()['mqtt_topic']) . '/</span>');
+        } elseif ($ko_meldung === 'kein UDP-Eingang') {
+            $ko_err = ko_t('MELDUNG.MQTT_NICHT_GESENDET');
+        } else {
+            $ko_err = sprintf(ko_t('MELDUNG.MQTT_TEILWEISE'), (int) $ko_n, (int) $ko_versucht, ko_e($ko_meldung));
+        }
         $ko_tab = 'tab-test';
     }
 
@@ -464,8 +553,14 @@ if (ko_ist_post()) {
     if (isset($_POST['clearlog'])) {
         $ko_logdatei = ko_paths()['log'];
         if (!is_dir(dirname($ko_logdatei))) { @mkdir(dirname($ko_logdatei), 0775, true); }
-        @file_put_contents($ko_logdatei,
-            '[' . date('Y-m-d H:i:s') . "] Protokoll geleert (Admin-Oberflaeche)\n");
+        // Den Erfolg pruefen: sonst stehen die alten Zeilen da, und niemand
+        // sagt warum (bis 1.2.6).
+        if (@file_put_contents($ko_logdatei,
+                '[' . date('Y-m-d H:i:s') . "] Protokoll geleert (Admin-Oberflaeche)\n") === false) {
+            $ko_err = sprintf(ko_t('LOG.M_NICHT_GELEERT'), ko_e($ko_logdatei));
+        } else {
+            $ko_note = ko_t('LOG.M_GELEERT');
+        }
         $ko_tab = 'tab-log';
     }
 }
@@ -513,13 +608,12 @@ $ko_weburl = ko_kodi_url();
 .sm-feld > label { display: block; font-weight: 600; font-size: 0.9em; color: #555; margin: 0 0 4px; }
 /* Bedienelemente werden von jQuery Mobile umgebaut und bekommen einen eigenen
    Behaelter. Begrenzt man das Feld selbst, bleibt der Behaelter breit - man
-   sieht ein schmales Feld in einem breiten weissen Kasten. */
+   sieht ein schmales Feld in einem breiten weissen Kasten. Und beim
+   Auswahlfeld liegt das unsichtbare <select> ueber dem Knopf und faengt die
+   Klicks ab; wer es gestaltet, schiebt es weg. Deshalb wird ausschliesslich
+   der Behaelter begrenzt. */
 .sm-feld .ui-input-text, .sm-feld .ui-select, .sm-feld .ui-textinput { max-width: 520px; }
 .sm-feld .ui-input-text input, .sm-feld .ui-input-text textarea { font-size: 0.95em; }
-.sm-feld input[type=text], .sm-feld input[type=password], .sm-feld input[type=number] {
-    width: 100%; max-width: 520px; padding: 8px 10px; border: 1px solid #ccc;
-    border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
-.sm-feld input[type=checkbox] { width: 17px; height: 17px; margin: 0 6px 0 0; vertical-align: middle; }
 .sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; max-width: 640px; }
 .sm-step { border: 1px solid #ddd; border-left: 4px solid #6dac20; background: #fafafa;
     border-radius: 6px; padding: 12px 14px; margin: 12px 0; font-size: 0.92em; line-height: 1.5; }
@@ -534,7 +628,9 @@ $ko_weburl = ko_kodi_url();
 .sm-knopfreihe form { margin: 0; display: flex; }
 /* LoxBerry bringt jQuery Mobile mit. Das formatiert JEDES <button> mit eigenem
    Hintergrund UND eigenen Hover-Regeln. Ohne !important steht weisse Schrift
-   auf hellgrauem Grund - und beim Ueberfahren weiss auf weiss. */
+   auf hellgrauem Grund - und beim Ueberfahren weiss auf weiss. Die
+   Hover-Farben unten sind kein Feinschliff, sondern Pflicht: fehlen sie, kommt
+   der Hover-Zustand vom Rahmen und ist unlesbar. */
 .sm-wrap .sm-knopfreihe .sm-btn, .sm-wrap a.sm-btn, .sm-wrap button.sm-btn {
     flex: 0 0 auto; min-width: 250px; text-align: center; display: inline-flex;
     align-items: center; justify-content: center; line-height: 1.25;
@@ -543,7 +639,8 @@ $ko_weburl = ko_kodi_url();
     border: 0 !important; cursor: pointer; font-weight: 600 !important;
     text-shadow: none !important; box-shadow: none !important;
     opacity: 1 !important; margin: 0 !important; width: auto !important; }
-/* Statuskacheln - bewusst ein anderer Name als sm-knopfreihe. */
+/* Statuskacheln — bewusst ein anderer Name als sm-knopfreihe.
+   Beide zu verwechseln hat am 26.07.2026 die Statusanzeige zerlegt. */
 .sm-kacheln { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
 .sm-kachel { border: 1px solid #ddd; border-radius: 10px; padding: 10px 14px; min-width: 130px; }
 .sm-kachel b { display: block; font-size: 1.35em; color: #33691e; }
@@ -560,9 +657,12 @@ $ko_weburl = ko_kodi_url();
 .sm-punkt.sm-b-lesen   { background: #6dac20; }
 .sm-punkt.sm-b-technik { background: #546e7a; }
 .sm-punkt.sm-b-aktion  { background: #e0620d; }
-/* Reiterinhalte: nur der aktive ist sichtbar. Die Klasse sm-active steht schon
-   im ausgelieferten HTML - ohne sie waere die Seite ohne JavaScript nicht etwa
-   untereinander aufgeklappt, sondern vollstaendig LEER. */
+/* Reiterinhalte: nur der aktive ist sichtbar.
+   Ohne diese zwei Zeilen stehen alle fuenf Reiter untereinander.
+   MIT ihnen und OHNE serverseitiges sm-active ist die Seite dagegen
+   vollstaendig leer, sobald das Skript nicht laeuft - genau das war bis
+   07.08.2026 der Fall. Die Klasse gehoert deshalb schon ins ausgelieferte
+   HTML, siehe die Reiterleiste weiter unten. */
 .sm-seite { display: none; padding-top: 4px; }
 .sm-seite.sm-active { display: block; }
 .sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
@@ -571,6 +671,18 @@ $ko_weburl = ko_kodi_url();
     padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
 .sm-an  { color: #1a7f1a; font-weight: 700; }
 .sm-aus { color: #b00000; font-weight: 700; }
+.sm-grau { color: #888; font-weight: 700; }
+/* Ab hier und in .sm-pre/.sm-knopfreihe form: Ergaenzungen dieses Plugins,
+   nicht aus der Vorlage.
+   Eingabefelder: sie tragen data-role="none", jQuery Mobile legt also keinen
+   Behaelter um sie, und die Behaelterregeln oben greifen nicht. Ohne diese
+   Regel stuenden sie als nackte Browserfelder da. Die Vorlage verbietet sie
+   nicht - ihr Satz "ausschliesslich der Behaelter" gilt fuer Felder, die
+   jQuery Mobile umbaut (AWM-Abfuhr und ACTiKamera gestalten ebenso). */
+.sm-feld input[type=text], .sm-feld input[type=password], .sm-feld input[type=number] {
+    width: 100%; max-width: 520px; padding: 8px 10px; border: 1px solid #ccc;
+    border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
+.sm-feld input[type=checkbox] { width: 17px; height: 17px; margin: 0 6px 0 0; vertical-align: middle; }
 /* Eine Tabelle, die breiter ist als das Fenster, braucht ihre eigene
    Bildlaufleiste - sonst steht die letzte Spalte ausserhalb und ist
    UNERREICHBAR, nicht bloss unbequem. */
@@ -610,17 +722,18 @@ $ko_weburl = ko_kodi_url();
 <?php } ?>
 
 <div class="sm-kacheln">
+  <?php
+  /* Die Klasse haengt am ZUSTAND, nicht an "leer oder nicht": "nicht
+   * feststellbar" ist grau, nicht rot (Regeln/04). Bis 1.2.6 stand bei
+   * schweigendem Helfer ein ROTES Fragezeichen - es sah aus wie ein Fehler
+   * des Dienstes. */
+  $ko_dl = ko_dienst_lage();
+  ?>
   <div class="sm-kachel"><?= ko_e(ko_t('ALLG.DIENST')) ?>
-    <b class="<?= (!empty($ko_st['kodistarted'])) ? 'sm-an' : 'sm-aus' ?>"><?php
-      /* Drei Zustaende, nicht zwei: laeuft, gestoppt, und "gar nicht
-       * installiert". Der dritte sah bis 1.2.1 wie der zweite aus. */
-      $ko_kp = ko_kodi_paket();
-      if (!$ko_st) { echo '?'; }
-      elseif (!empty($ko_st['kodistarted'])) { echo ko_e(ko_t('ALLG.LAEUFT')); }
-      elseif ($ko_kp['exec'] !== '' && !$ko_kp['datei']) { echo ko_e(ko_t('ALLG.NICHT_INSTALLIERT')); }
-      else { echo ko_e(ko_t('ALLG.GESTOPPT')); } ?></b></div>
+    <b class="<?= !$ko_st ? 'sm-grau' : (!empty($ko_st['kodistarted']) ? 'sm-an' : 'sm-aus') ?>"><?=
+      ko_e(ko_dienst_text($ko_st, $ko_dl)) ?></b></div>
   <div class="sm-kachel"><?= ko_e(ko_t('ALLG.AUTOSTART')) ?>
-    <b class="<?= (!empty($ko_st['kodiautostart'])) ? 'sm-an' : 'sm-aus' ?>"><?php
+    <b class="<?= !$ko_st ? 'sm-grau' : (!empty($ko_st['kodiautostart']) ? 'sm-an' : 'sm-aus') ?>"><?php
       echo !$ko_st ? '?' : ko_e(!empty($ko_st['kodiautostart']) ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS')); ?></b></div>
   <div class="sm-kachel"><?= ko_e(ko_t('ALLG.SENDER')) ?>
     <b class="<?= ((string) $ko_cfg['sender_ein'] === '1') ? 'sm-an' : 'sm-aus' ?>"><?php
@@ -635,9 +748,19 @@ $ko_weburl = ko_kodi_url();
 <?php } ?>
 
 <?php
+/* Kann Kodi hier ueberhaupt starten? Gemessen am 17.09.2026: ohne
+ * Grafiktreiber nicht - und die Seite sagte nur "gestoppt". Die Warnung
+ * steht oben, weil sie jede andere Zeile dieser Seite erklaert. */
+$ko_bild = ko_bildausgabe();
+if ($ko_bild['stand'] === 0) { ?>
+<div class="sm-warnung"><?= ko_t('MELDUNG.KEIN_BILD') ?></div>
+<?php } ?>
+
+<?php
 /* Der Autostart des Gateways - der Wortlaut ist im Haus festgelegt und steht
- * in der Sprachdatei. Strikter Vergleich auf false: bei "nicht lesbar"
- * erscheint KEINE Warnung, sondern ein Strich im Reiter Test. */
+ * in der Sprachdatei. Ist general.json nicht lesbar ($ko_gw === null),
+ * erscheint KEINE Warnung, sondern ein Strich im Reiter Test. Ein fehlender
+ * Schluessel Gatewayautostart gilt wie beim Vorbild MG iSmart als "aus". */
 if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 <div class="sm-warnung"><b>MQTT:</b> <?= ko_t('MELDUNG.W_AUTOSTART') ?></div>
 <?php } ?>
@@ -660,6 +783,32 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 
 <!-- ================= Einstellungen ================= -->
 <div class="sm-seite<?= ko_aktiv('tab-settings') ?>" id="tab-settings">
+<!-- Die Legende steht OBEN und nennt genau die Farben dieses Reiters
+     (Regeln/04). Bis 1.2.6 stand sie erst unter dem Speichern-Knopf. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= ko_e(ko_t('LEGENDE.LESEN')) ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
+</div>
+
+<h2><?= ko_e(ko_t('EINST.H_DIENST')) ?></h2>
+<div class="sm-hilfe"><?= $ko_st
+    ? sprintf(ko_t('EINST.DIENST_ZUSTAND'), '<b>' . ko_e(ko_dienst_text($ko_st, $ko_dl)) . '</b>')
+    : ko_e(ko_t('TEST.A_DIENST_UNBEKANNT')) ?></div>
+<!-- Start ist gruen, Anhalten und Neustarten orange: die Trennlinie ist
+     "kann den Betrieb stoeren" (Regeln/04). Bis 1.2.6 standen alle drei
+     orange im Reiter Test. -->
+<div class="sm-knopfreihe">
+    <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-settings">
+        <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="service" value="start"><?= ko_e(ko_t('TEST.K_START')) ?></button></form>
+    <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-settings">
+        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="restart"><?= ko_e(ko_t('TEST.K_NEUSTART')) ?></button></form>
+    <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-settings">
+        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="stop"><?= ko_e(ko_t('TEST.K_STOP')) ?></button></form>
+</div>
+<?php if ($ko_bild['stand'] === 0) { ?>
+<div class="sm-hilfe"><?= ko_t('EINST.START_OHNE_BILD') ?></div>
+<?php } ?>
+
 <form action="index.php" method="post">
 <?= ko_fmt() ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
@@ -689,7 +838,16 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 </div>
 <div class="sm-feld">
     <label for="ko_pass"><?= ko_e(ko_t('EINST.L_PASS')) ?></label>
-    <input data-role="none" type="password" id="ko_pass" name="kodi_pass" value="<?= ko_e($ko_cfg['kodi_pass']) ?>">
+    <!-- Das gespeicherte Passwort steht NICHT im Quelltext der Seite (bis
+         1.2.6 stand es dort als value=). Ein leeres Feld laesst es stehen;
+         geloescht wird ueber den Haken darunter. -->
+    <input data-role="none" type="password" id="ko_pass" name="kodi_pass" value="" autocomplete="new-password"
+        placeholder="<?= ko_e($ko_cfg['kodi_pass'] !== ''
+            ? ko_t('EINST.PASS_GESETZT') : ko_t('EINST.PASS_LEER')) ?>">
+    <?php if ($ko_cfg['kodi_pass'] !== '') { ?>
+    <label><input data-role="none" type="checkbox" name="kodi_pass_loeschen" value="1">
+        <?= ko_e(ko_t('EINST.L_PASS_LOESCHEN')) ?></label>
+    <?php } ?>
     <div class="sm-hilfe"><?= ko_t('EINST.H_ZUGANG') ?></div>
 </div>
 
@@ -697,25 +855,18 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
     <!-- Der versteckte Begleiter kommt IMMER mit. Ein nicht angehaktes
          Kaestchen schickt der Browser gar nicht - ohne ihn liesse sich der
          Haken nie wieder abwaehlen. -->
+    <?php /* ... aber nur, wenn der Helfer den Autostart gemeldet hat. Sonst
+             stuende das Kaestchen leer da, und ein Speichern wegen eines
+             ganz anderen Feldes schaltete den Autostart ab. */ ?>
+    <?php if (isset($ko_st['kodiautostart'])) { ?>
     <input data-role="none" type="hidden" name="hat_kodiautostart" value="1">
+    <?php } ?>
     <label><input data-role="none" type="checkbox" name="kodiautostart" value="1"
         <?= (!empty($ko_st['kodiautostart'])) ? 'checked' : '' ?>>
         <?= ko_e(ko_t('EINST.L_AUTOSTART')) ?></label>
 </div>
 
-<h2><?= ko_e(ko_t('EINST.H_SENDER')) ?></h2>
-<div class="sm-hinweis"><?= ko_t('EINST.SENDER_TEXT') ?></div>
-<div class="sm-feld">
-    <input data-role="none" type="hidden" name="hat_sender_ein" value="1">
-    <label><input data-role="none" type="checkbox" name="sender_ein" value="1"
-        <?= ((string) $ko_cfg['sender_ein'] === '1') ? 'checked' : '' ?>>
-        <?= ko_e(ko_t('EINST.L_SENDER')) ?></label>
-</div>
-<div class="sm-feld">
-    <label for="ko_takt"><?= ko_e(ko_t('EINST.L_TAKT')) ?></label>
-    <input data-role="none" type="number" id="ko_takt" name="sender_takt" value="<?= (int) $ko_cfg['sender_takt'] ?>">
-    <div class="sm-hilfe"><?= ko_t('EINST.H_TAKT') ?></div>
-</div>
+<h2><?= ko_e(ko_t('EINST.H2_RPC')) ?></h2>
 <div class="sm-feld">
     <input data-role="none" type="hidden" name="hat_rpc_ein" value="1">
     <label><input data-role="none" type="checkbox" name="rpc_ein" value="1"
@@ -748,10 +899,6 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 <h2><?= ko_e(ko_t('SICH.H_SICHERUNG')) ?></h2>
 <div class="sm-warnung"><?= ko_t('SICH.GEHEIM') ?></div>
 <div class="sm-hilfe"><?= ko_t('SICH.HINWEIS') ?></div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?= ko_e(ko_t('LEGENDE.LESEN')) ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
-</div>
 <!-- ZWEI GETRENNTE FORMULARE. Das Sichern schickt einen Download und ruft exit
      auf; das Zurueckspielen braucht enctype="multipart/form-data". Wer beides
      in ein Formular legt, bekommt entweder keinen Upload oder einen Download,
@@ -787,7 +934,23 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 
 <!-- ================= MQTT ================= -->
 <div class="sm-seite<?= ko_aktiv('tab-mqtt') ?>" id="tab-mqtt">
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
+</div>
 <h2>MQTT</h2>
+
+<?php
+/* Zustand des Gateways - hier, im Reiter MQTT (Regeln/04). Bis 1.2.6 stand er
+ * nur als Warnung ueber der Reiterleiste und als Zeile im Reiter Test. */
+if ($ko_gw === null) { ?>
+<div class="sm-hilfe"><?= ko_t('MQTT.GW_UNBEKANNT') ?></div>
+<?php } else { ?>
+<div class="sm-hilfe"><?= sprintf(ko_t('MQTT.GW_ZUSTAND'),
+    $ko_gwf > 0 ? 'V' . (int) $ko_gwf : ko_e(ko_t('TEST.A_GATEWAY_FASSUNG_UNBEKANNT')),
+    $ko_port ? (int) $ko_port : ko_e(ko_t('LOX.NICHT_GESETZT')),
+    $ko_gw['autostart'] ? ko_e(ko_t('ALLG.EIN')) : ko_e(ko_t('ALLG.AUS'))) ?></div>
+<?php } ?>
+
 <form action="index.php" method="post">
 <?= ko_fmt() ?>
 <input data-role="none" type="hidden" name="mqtt_save" value="1">
@@ -798,10 +961,56 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
     <div class="sm-hilfe"><?= sprintf(ko_t('MQTT.H_THEMA'),
         '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/dienst</span>') ?></div>
 </div>
+
+<h3><?= ko_e(ko_t('EINST.H_SENDER')) ?></h3>
+<div class="sm-hinweis"><?= ko_t('EINST.SENDER_TEXT') ?></div>
+<div class="sm-feld">
+    <input data-role="none" type="hidden" name="hat_sender_ein" value="1">
+    <label><input data-role="none" type="checkbox" name="sender_ein" value="1"
+        <?= ((string) $ko_cfg['sender_ein'] === '1') ? 'checked' : '' ?>>
+        <?= ko_e(ko_t('EINST.L_SENDER')) ?></label>
+</div>
+<div class="sm-feld">
+    <label for="ko_takt"><?= ko_e(ko_t('EINST.L_TAKT')) ?></label>
+    <input data-role="none" type="number" id="ko_takt" name="sender_takt" value="<?= (int) $ko_cfg['sender_takt'] ?>">
+    <div class="sm-hilfe"><?= ko_t('EINST.H_TAKT') ?></div>
+</div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ko_e(ko_t('ALLG.SPEICHERN')) ?></button>
 </div>
 </form>
+
+<h2><?= ko_e(ko_t('MQTT.H_ABO')) ?></h2>
+<?php if ($ko_gwf >= 2) { ?>
+<div class="sm-hinweis"><?= ko_t('LOX.ABO_V2') ?></div>
+<?php } else { ?>
+<div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
+    <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
+<div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
+<?php if ($ko_gwf === 0) { ?><div class="sm-hilfe"><?= ko_t('LOX.ABO_V2') ?></div><?php } ?>
+<?php } ?>
+
+<h2><?= ko_e(ko_t('LOX.H_THEMEN')) ?></h2>
+<div class="sm-hilfe"><?= ko_t('LOX.THEMEN_HINWEIS') ?></div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ko_e(ko_t('LOX.TH_THEMA')) ?></th><th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th>
+    <th><?= ko_e(ko_t('LOX.TH_WERTE')) ?></th><th><?= ko_e(ko_t('LOX.TH_QUELLE')) ?></th>
+    <th><?= ko_e(ko_t('LOX.TH_RETAIN')) ?></th><th><?= ko_e(ko_t('LOX.TH_VORLAGE')) ?></th></tr>
+<?php foreach (ko_themen() as $ko_th) { ?>
+<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic'] . '/' . $ko_th['name']) ?></td>
+    <td><?= ko_t('THEMA.' . $ko_th['schl']) ?></td>
+    <td><?= ko_t('THEMA.' . $ko_th['wschl']) ?></td>
+    <td><?= ko_e($ko_th['quelle'] === 'plugin' ? ko_t('LOX.Q_PLUGIN') : ko_t('LOX.Q_ADDON')) ?></td>
+    <td><?= !empty($ko_th['retain']) ? ko_e(ko_t('ALLG.JA')) : ko_e(ko_t('ALLG.NEIN')) ?></td>
+    <td><?= ko_thema_in_vorlage($ko_th, $ko_cfg) ? '<span class="sm-an">&#10004;</span>' : '&ndash;' ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-hilfe"><?= ko_t('LOX.TEXTTHEMEN') ?></div>
+<?php if ((string) $ko_cfg['sender_ein'] !== '1') { ?>
+<div class="sm-warnung"><?= sprintf(ko_t('LOX.SENDER_AUS'), ko_themen_plugin_zahl($ko_cfg)) ?></div>
+<?php } ?>
 
 <h2><?= ko_e(ko_t('ADDON.H')) ?></h2>
 <div class="sm-hinweis"><?= ko_t('ADDON.TEXT') ?></div>
@@ -825,9 +1034,6 @@ $ko_soll  = ko_addon_soll();
 <?php if ($ko_addon === null) { ?>
 <div class="sm-warnung"><?= ko_t('ADDON.NICHT_LESBAR') ?></div>
 <?php } ?>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
-</div>
 <form action="index.php" method="post">
 <?= ko_fmt() ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
@@ -844,14 +1050,25 @@ $ko_soll  = ko_addon_soll();
 
 <!-- ================= Einbindung in Loxone ================= -->
 <div class="sm-seite<?= ko_aktiv('tab-loxone') ?>" id="tab-loxone">
+<!-- Sieben Schritte mit Baustein-Liste (Regeln/04). Bis 1.2.6 hatte dieser
+     Reiter drei Schritte, keine Ausfallerkennung, keine Baustein-Liste und
+     keine Gegenprobe. Die Themen-Tabelle steht seit 1.2.7 im Reiter MQTT. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?= ko_e(ko_t('LEGENDE.TECHNIK')) ?></span>
+</div>
 
 <h2><?= ko_e(ko_t('LOX.H')) ?></h2>
+<?php if ((string) $ko_cfg['sender_ein'] !== '1') { ?>
+<div class="sm-warnung"><?= sprintf(ko_t('LOX.SENDER_AUS'), ko_themen_plugin_zahl($ko_cfg)) ?></div>
+<?php } ?>
 
+<h3><?= ko_e(ko_t('LOX.S1')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.SCHRITT1'),
     '<b>' . ($ko_port ? ko_e($ko_port) : ko_e(ko_t('LOX.NICHT_GESETZT'))) . '</b>') ?></div>
+
+<h3><?= ko_e(ko_t('LOX.S2')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.SCHRITT2'),
     '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/</span>') ?></div>
-
 <?php
 /* Was hier steht, haengt von der FASSUNG des MQTT-Gateways ab.
  *
@@ -865,57 +1082,56 @@ $ko_soll  = ko_addon_soll();
  * behaupten waere fuer die Haelfte der Anlagen falsch - und das in genau der
  * Zeile, die als haeufigste Fehlerursache gilt.
  *
- * UND SCHRITT 3 HAENGT MIT DARAN. Das Vorbild fuer diesen Block (MG iSmart
- * 1.1.0) hatte hier eine offene Stelle: die Verzweigung war richtig, ein
- * ZWEITER, statischer Hinweis weiter unten behauptete den V1-Satz aber
- * weiterhin unbedingt - unter V2 standen damit beide Texte auf derselben
- * Seite. Genau dieselbe Falle steckte hier: der Satz "Im Gateway die
- * gewuenschten Themen dem Miniserver zuweisen" beschreibt die V1-Bedienung
- * und stand ausserhalb jeder Verzweigung.
- *
  * Regel daraus: Der Satz zur Gateway-Fassung steht an GENAU EINER Stelle je
  * Fassung, und alles, was von ihr abhaengt, steht IM SELBEN Zweig. Die
  * Pruefzeile "Aussagen zur Gateway-Fassung" im Reiter Test zaehlt nach, ob
- * der V1-Satz ausserhalb seines Schluessels noch irgendwo auftaucht. */
+ * der V1-Satz ausserhalb seines Schluessels noch irgendwo auftaucht.
+ *
+ * Gemessen am 17.09.2026 im Quelltext des Geraets (LoxBerry 4.0.0.15,
+ * sbin/mqtt_gateway.py): auch Gateway V2 lauscht IMMER auf Mqtt.Udpinport und
+ * versteht publish und retain. Der Sendeweg dieses Plugins ist unter beiden
+ * Fassungen derselbe; verschieden ist nur, was in den Abonnements zu tun ist. */
 if ($ko_gwf >= 2) { ?>
 <div class="sm-hinweis"><?= ko_t('LOX.ABO_V2') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V2') ?></div>
 <?php } elseif ($ko_gwf === 1) { ?>
+<div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
+    <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
 <div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V1') ?></div>
 <?php } else { ?>
+<div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
+    <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
 <div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
 <div class="sm-hilfe"><?= ko_t('LOX.ABO_V2') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V1') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V2') ?></div>
 <?php } ?>
 
-<h2><?= ko_e(ko_t('LOX.H_THEMEN')) ?></h2>
-<div class="sm-hilfe"><?= ko_t('LOX.THEMEN_HINWEIS') ?></div>
+<h3><?= ko_e(ko_t('LOX.S3')) ?></h3>
+<?php
+$ko_vi = array();
+$ko_text_zahl = 0;
+foreach (ko_themen() as $ko_th) {
+    if ($ko_th['quelle'] !== 'plugin') { continue; }
+    if (ko_thema_in_vorlage($ko_th, $ko_cfg)) { $ko_vi[] = $ko_th; }
+    elseif (empty($ko_th['zahl'])) { $ko_text_zahl++; }
+}
+?>
+<div class="sm-step"><?= sprintf(ko_t('LOX.S3_TEXT'), count($ko_vi), $ko_text_zahl) ?></div>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th><?= ko_e(ko_t('LOX.TH_THEMA')) ?></th><th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th>
-    <th><?= ko_e(ko_t('LOX.TH_WERTE')) ?></th><th><?= ko_e(ko_t('LOX.TH_QUELLE')) ?></th>
-    <th><?= ko_e(ko_t('LOX.TH_VORLAGE')) ?></th></tr>
-<?php foreach (ko_themen() as $ko_th) { ?>
-<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic'] . '/' . $ko_th['name']) ?></td>
-    <td><?= ko_t('THEMA.' . $ko_th['schl']) ?></td>
+<tr><th><?= ko_e(ko_t('LOX.TH_EINGANG')) ?></th><th><?= ko_e(ko_t('LOX.TH_WERTE')) ?></th>
+    <th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th><th><?= ko_e(ko_t('LOX.TH_RETAIN')) ?></th></tr>
+<?php foreach ($ko_vi as $ko_th) { ?>
+<tr><td class="sm-mono"><?= ko_e(str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $ko_th['name'])) ?></td>
     <td><?= ko_t('THEMA.' . $ko_th['wschl']) ?></td>
-    <td><?= ko_e($ko_th['quelle'] === 'plugin' ? ko_t('LOX.Q_PLUGIN') : ko_t('LOX.Q_ADDON')) ?></td>
-    <td><?= $ko_th['zahl'] ? '<span class="sm-an">&#10004;</span>' : '&ndash;' ?></td></tr>
+    <td><?= ko_t('THEMA.' . $ko_th['schl']) ?></td>
+    <td><?= !empty($ko_th['retain']) ? ko_e(ko_t('ALLG.JA')) : ko_e(ko_t('ALLG.NEIN')) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-hilfe"><?= ko_t('LOX.TEXTTHEMEN') ?></div>
-<?php if ((string) $ko_cfg['sender_ein'] !== '1') { ?>
-<div class="sm-warnung"><?= ko_t('LOX.SENDER_AUS') ?></div>
-<?php } ?>
-
-<h2><?= ko_e(ko_t('LOX.H_VORLAGE')) ?></h2>
 <div class="sm-hinweis"><?= ko_t('LOX.H_VORLAGE_TEXT') ?></div>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?= ko_e(ko_t('LEGENDE.TECHNIK')) ?></span>
-</div>
 <div class="sm-knopfreihe">
 <form action="index.php" method="post">
   <?= ko_fmt() ?>
@@ -923,6 +1139,13 @@ if ($ko_gwf >= 2) { ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
   <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= ko_e(ko_t('LOX.K_VORLAGE')) ?></button>
 </form>
+</div>
+
+<h3><?= ko_e(ko_t('LOX.S4')) ?></h3>
+<div class="sm-step"><?= ko_t('LOX.STEUERN_TEXT') ?></div>
+<div class="sm-step sm-mono">tcp://<?= ko_e(ko_steuer_wirt()) ?>:9090</div>
+<div class="sm-hilfe"><?= ko_t('LOX.ADRESSE_PRUEFEN') ?></div>
+<div class="sm-knopfreihe">
 <form action="index.php" method="post">
   <?= ko_fmt() ?>
   <input data-role="none" type="hidden" name="vorlage" value="vo">
@@ -930,19 +1153,72 @@ if ($ko_gwf >= 2) { ?>
   <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= ko_e(ko_t('LOX.K_VORLAGE_VO')) ?></button>
 </form>
 </div>
+<div class="sm-hilfe"><?= sprintf(ko_t('LOX.VORLAGE_HINWEIS'), count(ko_vo_befehle())) ?></div>
 
-<h2><?= ko_e(ko_t('LOX.H_STEUERN')) ?></h2>
-<div class="sm-hilfe"><?= ko_t('LOX.STEUERN_TEXT') ?></div>
-<div class="sm-step sm-mono">tcp://<?= ko_e($ko_cfg['kodi_host'] === '127.0.0.1'
-    ? $ko_host : $ko_cfg['kodi_host']) ?>:9090</div>
-<div class="sm-hilfe"><?= ko_t('LOX.VORLAGE_HINWEIS') ?></div>
+<h3><?= ko_e(ko_t('LOX.S5')) ?></h3>
+<div class="sm-step"><?= sprintf(ko_t('LOX.S5_TEXT'),
+    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/zeitstempel</span>',
+    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/herzschlag</span>',
+    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/status/ok</span>') ?></div>
+
+<h3><?= ko_e(ko_t('LOX.S6')) ?></h3>
+<div class="sm-hilfe"><?= ko_t('BAUSTEIN.VORTEXT') ?></div>
+<?php
+/* Die Namen der Eingaenge kommen aus DERSELBEN Rechnung wie die Vorlage
+ * (Praefix, Unterstrich statt Schraegstrich) - eine zweite Schreibweise hier
+ * waere eine zweite Anleitung. Jede Zeile bezieht sich nur auf kleinere
+ * Nummern; kein UND/ODER mit mehr als zwei Eingaengen (Regeln/04, 09). */
+$ko_vn = function ($name) use ($ko_cfg) {
+    return '<span class="sm-mono">' . ko_e(str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name)) . '</span>';
+};
+$ko_bl = array(
+    array('B_VE', $ko_vn('dienst'),      ko_t('BAUSTEIN.P_DIGITAL'), ko_t('BAUSTEIN.V_GATEWAY')),
+    array('B_VE', $ko_vn('status/ok'),   ko_t('BAUSTEIN.P_DIGITAL'), ko_t('BAUSTEIN.V_GATEWAY')),
+    array('B_VE', $ko_vn('zeitstempel'), ko_t('BAUSTEIN.P_ZEIT'),    ko_t('BAUSTEIN.V_GATEWAY')),
+    array('B_FORMEL',    ko_e(ko_t('BAUSTEIN.N_ALTER')),    '<span class="sm-mono">I1+1230768000-I2</span>', ko_t('BAUSTEIN.V_ALTER')),
+    array('B_SCHWELL',   ko_e(ko_t('BAUSTEIN.N_STUMM')),    ko_t('BAUSTEIN.P_STUMM'),   ko_t('BAUSTEIN.V_4')),
+    array('B_NICHT',     ko_e(ko_t('BAUSTEIN.N_NICHTGEMESSEN')), '&mdash;',            ko_t('BAUSTEIN.V_2')),
+    array('B_ODER',      ko_e(ko_t('BAUSTEIN.N_SAMMEL')),   '&mdash;',                   ko_t('BAUSTEIN.V_5_6')),
+    array('B_EINVERZ',   ko_e(ko_t('BAUSTEIN.N_BESTAETIGT')), ko_t('BAUSTEIN.P_EINVERZ'), ko_t('BAUSTEIN.V_7')),
+    array('B_BENACHR',   ko_e(ko_t('BAUSTEIN.N_MELDUNG')),  ko_t('BAUSTEIN.P_MELDUNG'), ko_t('BAUSTEIN.V_8')),
+    array('B_STATUS',    ko_e(ko_t('BAUSTEIN.N_STATUS')),   ko_t('BAUSTEIN.P_STATUS'),  ko_t('BAUSTEIN.V_1_8')),
+);
+?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th>#</th><th><?= ko_e(ko_t('BAUSTEIN.SP_BAUSTEIN')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.SP_NAME')) ?></th>
+    <th><?= ko_e(ko_t('BAUSTEIN.SP_PARAMETER')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.SP_EINGAENGE')) ?></th></tr>
+<?php foreach ($ko_bl as $ko_i => $ko_b) { ?>
+<tr><td><?= (int) $ko_i + 1 ?></td><td><?= ko_e(ko_t('BAUSTEIN.' . $ko_b[0])) ?></td><td><?= $ko_b[1] ?></td>
+    <td><?= $ko_b[2] ?></td><td><?= $ko_b[3] ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-hilfe"><?= ko_t('BAUSTEIN.ZU') ?></div>
+
+<h3><?= ko_e(ko_t('LOX.S7')) ?></h3>
+<div class="sm-step"><?= sprintf(ko_t('LOX.S7_TEXT'),
+    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/#</span>',
+    $ko_vn('herzschlag')) ?></div>
 
 </div>
 
 <!-- ================= Test ================= -->
 <div class="sm-seite<?= ko_aktiv('tab-test') ?>" id="tab-test">
 
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= ko_e(ko_t('LEGENDE.LESEN')) ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= ko_e(ko_t('LEGENDE.TECHNIK')) ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
+</div>
+
 <h2><?= ko_e(ko_t('TEST.H_SELBST')) ?></h2>
+<?php
+/* NUR, WENN DIESER REITER SERVERSEITIG DER OFFENE IST (Regeln/04). Alle
+ * Reiter werden bei jedem Seitenaufruf mitgerendert; die Selbstpruefung ruft
+ * den Helfer ueber sudo, fragt dpkg und liest die Addon-Einstellungen - bis
+ * 1.2.6 bei jedem Klick im Reiter Einstellungen. */
+if ($ko_tab === 'tab-test') { ?>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th style="width:2em;">&nbsp;</th><th><?= ko_e(ko_t('TEST.TH_FRAGE')) ?></th><th><?= ko_e(ko_t('TEST.TH_ANTWORT')) ?></th></tr>
@@ -955,12 +1231,9 @@ if ($ko_gwf >= 2) { ?>
 <?php } ?>
 </table>
 </div>
-
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?= ko_e(ko_t('LEGENDE.LESEN')) ?></span>
-<span><i class="sm-punkt sm-b-technik"></i> <?= ko_e(ko_t('LEGENDE.TECHNIK')) ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
-</div>
+<?php } else { ?>
+<div class="sm-hinweis"><?= sprintf(ko_t('TEST.SELBST_NACHLADEN'), 'index.php?form=test') ?></div>
+<?php } ?>
 
 <h3><?= ko_e(ko_t('TEST.H3_ANSEHEN')) ?></h3>
 <div class="sm-knopfreihe">
@@ -990,13 +1263,11 @@ if ($ko_weburl !== '') { ?>
 </div>
 
 <h3><?= ko_e(ko_t('TEST.H3_AKTION')) ?></h3>
+<!-- Der Satz, dass diese Knoepfe sofort wirken, gehoert UEBER die Reihe
+     (Regeln/04). Kodi starten und anhalten steht seit 1.2.7 im Reiter
+     Einstellungen, beim Dienstzustand. -->
+<div class="sm-step"><?= ko_t('TEST.SCHALTEN_HINWEIS') ?></div>
 <div class="sm-knopfreihe">
-    <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="start"><?= ko_e(ko_t('TEST.K_START')) ?></button></form>
-    <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="stop"><?= ko_e(ko_t('TEST.K_STOP')) ?></button></form>
-    <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-test">
-        <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="service" value="restart"><?= ko_e(ko_t('TEST.K_NEUSTART')) ?></button></form>
     <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-test">
         <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="mqtttest" value="1"><?= ko_e(ko_t('TEST.K_MQTTTEST')) ?></button></form>
     <form action="index.php" method="post"><?= ko_fmt() ?><input data-role="none" type="hidden" name="activetab" value="tab-test">
@@ -1012,8 +1283,13 @@ if ($ko_weburl !== '') { ?>
 
 <!-- ================= Logdateien ================= -->
 <div class="sm-seite<?= ko_aktiv('tab-log') ?>" id="tab-log">
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
+</div>
 <h2><?= ko_e(ko_t('REITER.LOG')) ?></h2>
 <div class="sm-hilfe"><span class="sm-mono"><?= ko_e($ko_p['log']) ?></span></div>
+<!-- log/plugins liegt auf einer Ramdisk (Regeln/04): das muss dastehen. -->
+<div class="sm-hilfe"><?= ko_t('LOG.RAMDISK') ?></div>
 <?php
 $ko_zeilen = ko_log_ende($ko_p['log'], 300);
 if ($ko_zeilen) {
@@ -1021,9 +1297,6 @@ if ($ko_zeilen) {
 } else { ?>
 <div class="sm-hinweis"><?= ko_e(ko_t('LOG.KEIN_PROTOKOLL')) ?></div>
 <?php } ?>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
-</div>
 <!-- Orange, nicht rot: Rot ist im Hausstandard nicht vorgesehen - es liest
      sich als Warnung vor einer Gefahr, und ein geleertes Protokoll ist keine.
      Die Farbe sagt nur: dieser Knopf veraendert etwas. -->

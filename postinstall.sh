@@ -12,7 +12,44 @@
 ARGV3=$3   # Installationsordner des Plugins
 ARGV5=$5   # Wurzelverzeichnis des LoxBerry
 
-BASE="${ARGV5:-$LBHOMEDIR}"
+# DIE WURZEL WIRD GEPRUEFT, NICHT GEGLAUBT - dieselbe Pruefung wie in
+# preupgrade.sh und postupgrade.sh (dort begruendet). Bis 1.2.7 stand hier
+# nur BASE="${ARGV5:-$LBHOMEDIR}"; war beides leer, liefen mkdir und chmod
+# still gegen "/log/plugins/..." und "/bin/plugins/...", und die Cron-Pruefung
+# unten meldete einen fehlenden Eintrag an einem Ort, den es nicht gibt.
+# Ohne Wurzel: <FAIL> und Rueckgabewert 1 (die Installation laeuft weiter und
+# fuehrt die Zeile in ihrer Fehlerliste).
+ko_ist_loxberry() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] \
+        && [ -f "$1/config/system/general.json" ]
+}
+ko_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if ko_ist_loxberry "$v"; then
+            echo "$v"
+            return 0
+        fi
+        v=$(dirname "$v")
+        i=$((i + 1))
+    done
+    return 1
+}
+BASE=""
+if ko_ist_loxberry "$ARGV5"; then
+    BASE="$ARGV5"
+elif ko_ist_loxberry "$LBHOMEDIR"; then
+    BASE="$LBHOMEDIR"
+else
+    BASE=$(ko_wurzel_suchen)
+fi
+if [ -z "$BASE" ]; then
+    echo "<FAIL> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln (fuenftes"
+    echo "<FAIL> Argument: '$ARGV5', LBHOMEDIR: '$LBHOMEDIR'). Verzeichnisse, Rechte"
+    echo "<FAIL> und der Cron-Eintrag wurden NICHT eingerichtet bzw. geprueft."
+    exit 1
+fi
 # Der Rueckfall hiess bis 1.1.9 "kodi" - das ist der Ordnername VOR der
 # Umbenennung auf kodi_ng. Griff er, legte dieses Skript Verzeichnisse an,
 # die niemand mehr liest, und setzte die Ausfuehrungsrechte an einer Stelle,

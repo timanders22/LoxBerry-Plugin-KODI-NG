@@ -10,7 +10,62 @@ ARGV5=$5   # Wurzelverzeichnis des LoxBerry
 # Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
 LBHOMEDIR="${LBHOMEDIR:-$5}"
 
-BASE="${ARGV5:-$LBHOMEDIR}"
+# DIE WURZEL WIRD GEPRUEFT, NICHT GEGLAUBT (fail closed wie uninstall).
+#
+# Bis 1.2.7 stand hier nur BASE="${ARGV5:-$LBHOMEDIR}". War beides leer,
+# wurde BASE leer, die Pruefung unten fand unter "/config/plugins/kodi_ng"
+# nichts, meldete "offenbar eine Erstinstallation" - und der Installer
+# loeschte danach die Konfiguration, ohne dass es eine Sicherung gab.
+#
+# Jetzt zaehlt ein Verzeichnis nur als LoxBerry-Wurzel, wenn es
+# config/plugins, data/plugins UND config/system/general.json traegt
+# (Regeln/06: ohne general.json trifft eine Suche auf einem Pruefrechner das
+# Laufwerk). Reihenfolge: fuenftes Argument, LBHOMEDIR, dann aufwaerts vom
+# Ablageort dieses Skripts (der Installer ruft es im ausgepackten Paket
+# unterhalb von data/system/tmp/uploads auf), hoechstens acht Ebenen.
+#
+# Findet sich keine, bricht dieses Skript mit Rueckgabewert 2 ab. Am Geraet
+# nachgelesen (sbin/plugininstall.pl, LoxBerry 4.0.0.15, Zeilen 845-874): ein
+# Wert groesser 1 beendet die Installation ("Installation cannot be
+# continued") VOR purge_installation - die alte Fassung samt Konfiguration
+# bleibt dann unberuehrt stehen. Ein Update ohne Sicherung waere schlimmer
+# als gar keins.
+ko_ist_loxberry() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] \
+        && [ -f "$1/config/system/general.json" ]
+}
+ko_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if ko_ist_loxberry "$v"; then
+            echo "$v"
+            return 0
+        fi
+        v=$(dirname "$v")
+        i=$((i + 1))
+    done
+    return 1
+}
+BASE=""
+for KO_KAND in "$ARGV5" "$LBHOMEDIR"; do
+    if ko_ist_loxberry "$KO_KAND"; then
+        BASE="$KO_KAND"
+        break
+    fi
+done
+if [ -z "$BASE" ]; then
+    BASE=$(ko_wurzel_suchen)
+fi
+if [ -z "$BASE" ]; then
+    echo "<FAIL> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln (fuenftes"
+    echo "<FAIL> Argument: '$ARGV5', LBHOMEDIR: '$LBHOMEDIR', Suche ab dem Ablageort"
+    echo "<FAIL> dieses Skripts ohne Treffer). Die Konfiguration von Kodi NG kann"
+    echo "<FAIL> deshalb NICHT gesichert werden, und das Update wuerde sie loeschen."
+    echo "<FAIL> Das Update wird hier abgebrochen; die bisherige Fassung bleibt"
+    echo "<FAIL> unveraendert installiert."
+    exit 2
+fi
 # Der Rueckfall hiess bis 1.1.9 "kodi" - der Ordnername VOR der
 # Umbenennung auf kodi_ng. Griff er, sicherte bzw. suchte dieses
 # Skript in einem Verzeichnis, das es nicht mehr gibt.
@@ -48,10 +103,22 @@ chmod 0700 "$SICHER" 2>/dev/null
 # gar keine Konfiguration gab.
 if [ -d "$BASE/config/plugins/$PDIR" ] \
    && [ -n "$(ls -A "$BASE/config/plugins/$PDIR" 2>/dev/null)" ]; then
-    cp -a "$BASE/config/plugins/$PDIR/." "$SICHER/config/" 2>/dev/null
-    echo "<OK> Konfiguration gesichert."
+    # Das Ergebnis PRUEFEN: meldete dieses Skript "gesichert", ohne dass
+    # etwas gesichert war, loeschte der Installer danach die einzige Kopie.
+    # Rueckgabewert 2 bricht die Aktualisierung vor dem Loeschen ab
+    # (plugininstall.pl: >1 = Abbruch), die alte Fassung bleibt stehen.
+    if cp -a "$BASE/config/plugins/$PDIR/." "$SICHER/config/" \
+       && diff -r "$BASE/config/plugins/$PDIR" "$SICHER/config" >/dev/null 2>&1; then
+        echo "<OK> Konfiguration gesichert."
+    else
+        echo "<FAIL> Die Konfiguration liess sich NICHT nach $SICHER sichern."
+        echo "<FAIL> Die Aktualisierung wird abgebrochen, damit sie nicht verlorengeht."
+        exit 2
+    fi
 else
-    echo "<INFO> Keine Konfiguration vorhanden - offenbar eine Erstinstallation."
+    # Dieses Skript laeuft nur bei einem Update - "Erstinstallation" war
+    # hier nie die richtige Erklaerung.
+    echo "<INFO> Unter $BASE/config/plugins/$PDIR liegt keine Konfiguration - es gibt nichts zu sichern."
 fi
 
 exit 0

@@ -1,12 +1,188 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.6 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.7 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.7 – am Gerät gemessen, und was dabei herauskam
+
+Diese Fassung beruht auf einer Messung am LoxBerry des Hauses (17.09.2026,
+LoxBerry 4.0.0.15 auf DietPi, Raspberry Pi 4, Kodi 21.3 aus dem Paket, 1.2.6
+installiert und byteweise gleich mit dem Tag) und auf einer Durchsicht aller
+Dateien gegen die Hausregeln. Was gemessen und was nur gelesen ist, steht bei
+jedem Punkt.
+
+### Am Gerät gemessen
+
+* **Kodi kann auf diesem LoxBerry gar nicht starten.** Es gibt kein
+  `/dev/dri`; Kodi bricht mit `no drm devices found` / `unable to init
+  windowing system` ab (Rückgabewert 255). Auf einem Raspberry Pi fehlt dann
+  `dtoverlay=vc4-kms-v3d` in der `config.txt`. Das Plugin trägt die Zeile
+  **nicht** selbst ein — sie ändert die Bootkonfiguration des ganzen Geräts —,
+  sagt es aber jetzt oben auf der Seite und im Reiter Test (neue Zeile *Kann
+  Kodi ein Bild erzeugen?*).
+* **Die Oberfläche sagte eine Woche lang „gestoppt".** Der Dienst startete
+  `kodi-standalone`; dieses Skript beendet sich nach drei Abstürzen binnen
+  einer Minute selbst mit Rückgabewert **0**. systemd sah „erfolgreich
+  beendet", `Restart=on-failure` griff nie. Die Unit startet jetzt
+  `/usr/bin/kodi --standalone` unmittelbar; ein Absturz kommt als Absturz an,
+  und Kachel und Reiter Test sagen *abgestürzt (Rückgabewert …)*.
+* **`StartLimitIntervalSec` wirkte nie.** Es stand unter `[Service]`; systemd
+  schrieb dazu stündlich „Unknown key … ignoring" ins Journal und rechnete
+  mit 10 s. Steht jetzt unter `[Unit]` (600 s, fünf Versuche), `systemd-analyze
+  verify` meldet nichts mehr.
+* **Das Setzen der Addon-Felder meldete am Gerät immer einen Fehler.** Der
+  Helfer schrieb unter `sudo` seine HTTP-Kopfzeilen (`Status: 200 OK`) vor das
+  JSON; zwei Stellen der Oberfläche gaben die Antwort ungeschnitten an
+  `json_decode`. Beide Seiten sind berichtigt.
+* **Port 8080 gehört auf diesem LoxBerry einem anderen Plugin** (FOSHKplugin).
+  Kodis Webserver bekäme ihn nicht. Der JSON-RPC-Abruf sagt jetzt, *wer*
+  geantwortet hat, statt nur „HTTP 501".
+* **Der Sendeweg ist belegt, aber mit Verzug.** Eine einmalige Sendeprobe
+  (Auftrag des Hausherrn) kam im Broker an — nach mehreren Minuten, weil der
+  UDP-Eingang des Gateways zwei Megabyte hinterherhing. Der Rückgabewert des
+  Plugins hatte da längst „4 Werte gesendet" gemeldet. Die Reste der Probe
+  sind aus dem Broker entfernt.
+* **Gateway V2** wurde nicht eingeschaltet, sondern am Quelltext des Geräts
+  gelesen (`sbin/mqtt_gateway.py`): es lauscht ebenfalls immer auf
+  `Mqtt.Udpinport` und versteht `publish` und `retain`. Der Sendeweg ist unter
+  beiden Fassungen derselbe.
+* **dpkg** meldet `install ok installed|3:21.3+dfsg-1+rpt3`.
+
+### Statussender und MQTT
+
+* **Das Lebenszeichen ist nie mehr retained** (Hausstandard seit 03.09.2026).
+  `zeitstempel` und `herzschlag` gingen bis 1.2.6 zurückbehalten hinaus und
+  zeigten nach dem Tod des Senders für immer „lebt". Beim ersten Lauf nach dem
+  Update löscht der Sender die zurückbehaltenen Altwerte einmal.
+* **Neu: `status/ok`** — 1, wenn der Lauf den Kodi-Dienst wirklich befragen
+  konnte, sonst 0; retained. Die Namen `zeitstempel` und `herzschlag` bleiben.
+* **Lebenszeichen jede Minute, Zustände im Takt.** Bis 1.2.6 ging alles nur im
+  Takt hinaus.
+* **Ein Lauf gilt erst als gelungen, wenn der Helfer geantwortet hat und jede
+  Zeile übergeben wurde.** Bis 1.2.6 genügte ein einziger Wert — bei totem
+  Helfer zeigte der Reiter Test einen grünen Haken mit steigendem Herzschlag.
+* **Der Takt hängt am Versuch, nicht am Erfolg.** Scheiterte das Senden, lief
+  der volle Lauf bis 1.2.6 jede Minute und schrieb das Protokoll voll. Dieselbe
+  Störung steht jetzt höchstens einmal je Stunde darin.
+* **Der Trockenlauf geht denselben Weg bis vor den Socket** und zeigt, ob der
+  echte Lauf am UDP-Eingang scheitern würde.
+* **Fehlerausgabe des Cron-Laufs ins Plugin-Protokoll.** Bis 1.2.6 hieß es, sie
+  lande im Systemlogger; ohne Mailserver warf cron sie weg. Ohne `kodi.json`
+  startet der Cron keinen PHP-Prozess mehr.
+* **Vorlage der Messwerte:** `erreichbar` nur noch mit eingeschalteter
+  JSON-RPC-Abfrage (sonst stand dort dauerhaft 0); der Kommentar sagt je nach
+  Gateway-Fassung, was zu tun ist; die Anzeigenamen tragen den Vorsatz
+  `Kodi: `. Wer `kodi_status_ok` in Loxone haben will, liest die Vorlage neu
+  ein — Loxone Config legt dabei alle Eingänge noch einmal an.
+
+### Oberfläche
+
+* **Reiter MQTT** führt jetzt alle MQTT-Belange: Thema, Statussender und Takt
+  (bis 1.2.6 im Reiter Einstellungen), Zustand des Gateways, das Abo zum
+  Kopieren und die Themen-Tabelle mit Spalte *retained*.
+* **Reiter Einbindung in Loxone** in sieben Schritten, mit Ausfallerkennung,
+  kompletter Baustein-Liste und Gegenprobe.
+* **Reiter Einstellungen** trägt den Dienstzustand mit Starten (grün),
+  Neustarten und Anhalten (orange). Das Kodi-Passwort steht nicht mehr im
+  Quelltext der Seite; ein leeres Feld löscht es nicht, dafür gibt es einen
+  Haken.
+* **Reiter Test:** neue Zeilen *Ist der Kodi-Dienst bei systemd eingespielt?*,
+  *Kann Kodi ein Bild erzeugen?* und *Geht das Lebenszeichen ohne Retain
+  hinaus?*; die Selbstprüfung läuft nur noch, wenn der Reiter geöffnet ist; die
+  schaltenden Knöpfe stehen unter *Schalten* mit dem Satz, dass sie sofort
+  wirken.
+* Legenden stehen oben im Reiter; „nicht feststellbar" ist grau, nicht rot; die
+  Kommentare im CSS-Block stehen wieder wortgetreu wie in der Hausvorlage, die
+  Ergänzungen des Plugins (Eingabefelder, `.sm-grau`) sind als solche
+  gekennzeichnet.
+* Das gespeicherte Passwort steht nicht mehr im Quelltext der Seite, auch nicht
+  seine Länge; ein leeres Feld lässt es stehen, gelöscht wird über einen Haken.
+
+### Richtigkeit und Sicherheit
+
+* `kodi_host` hat eine Positivliste; `/`, `?`, `@` und Doppelpunkt schickten
+  die Anfrage samt Anmeldung sonst an einen fremden Wirt. IPv6 ohne Klammern
+  (`::1`) wird in die Klammerform gebracht statt abgewiesen.
+* Der JSON-RPC-Abruf folgt keiner Umleitung und hat eine Zeitschranke auch für
+  den Verbindungsaufbau.
+* Die Antworten des Helfers auf *Autostart* und *Codec-Lizenz* werden gelesen;
+  bis 1.2.6 stand „Gespeichert", auch wenn nichts geschrieben war.
+* Speichern im Reiter Einstellungen schaltet den Autostart nur, wenn der Helfer
+  ihn beim Seitenaufbau gemeldet hat — sonst stand das Kästchen leer, und wer
+  nur den Port änderte, schaltete den Autostart ab.
+* Die Sicherung schreibt den Autostart nur, wenn er gemessen ist — bis 1.2.6
+  stand bei schweigendem Helfer `autostart 0`, und das Zurückspielen schaltete
+  ihn auf dem Zielgerät **ab**.
+* Die Adresse in der Vorlage der Steuerbefehle kommt aus derselben Funktion wie
+  die Anzeige (bis 1.2.6 wurde aus `[fd00::1]` `tcp://[fd00:9090`).
+* *Ist Kodi installiert?* wertet das dritte Wort des dpkg-Zustands aus (`hold
+  ok installed` galt als nicht installiert) und liest die eingespielte Unit.
+
+### Helfer und Installation
+
+* Helfer: gemischte `settings.xml` wird richtig gelesen (vorher ging beim
+  nächsten Schreiben `mqtt_topic` verloren); die Sperre „Kodi läuft" fällt
+  geschlossen aus; jeder Pfadbestandteil unter `/home/kodi` wird auf Verweise
+  geprüft; ein leerer Wert wird abgewiesen; keine Fehlersuch-Ausgaben mehr;
+  vor *Starten* und *Neu starten* wird eine Startsperre von systemd gelöst.
+* `postroot.sh` schreibt die `config.txt` atomar, findet seine Dateien ohne
+  vom Arbeitsverzeichnis abzuhängen und meldet ein `<FAIL>` mit Rückgabewert 1.
+  Liegt unter `/home/kodi` ein Verweis auf `advancedsettings.xml` oder im
+  Addon-Ordner, folgt es ihm als root nicht, sondern meldet ihn; `chown` stellt
+  Verweise selbst um, nie ihr Ziel. Der alte Sprachordner `English` des Addons
+  wird entfernt.
+* `uninstall` entfernt aus der `config.txt` nur die eigenen Zeilen, statt den
+  Stand von vor der ersten Installation zurückzuspielen (der fremde Einträge
+  vernichtete); Zweitschriften mit dem Kodi-Passwort werden vor dem Löschen
+  überschrieben (`oflag=nofollow`); als LoxBerry-Wurzel gilt wie in den
+  übrigen Hakenskripten nur ein Ordner mit `config/system/general.json`.
+* `preupgrade.sh`/`postupgrade.sh`/`postinstall.sh` fallen geschlossen aus, wenn
+  die LoxBerry-Wurzel nicht zu finden ist, statt „Erstinstallation" zu melden.
+  `preupgrade.sh` vergleicht die Sicherung mit dem Original und bricht das
+  Update ab (Rückgabewert 2), wenn sie nicht vollständig ist;
+  `postupgrade.sh` löscht die Sicherung nur, wenn das Zurückstellen gelungen
+  ist.
+
+**`<esallinterfaces>` bleibt eingeschaltet.** Eine Durchsicht hatte ihn als
+überflüssig gemeldet, weil kein Teil des Plugins Kodis EventServer (UDP 9777)
+benutzt. Das war falsch: im Quelltext von Kodi 21 (`NetworkServices.cpp`,
+`StartJSONRPCServer`) steuert derselbe Schalter, ob der JSON-RPC-Server auf
+**TCP 9090** auch für andere Rechner lauscht — und genau dorthin schickt der
+Miniserver die Steuerbefehle. Ohne ihn wäre die Steuerung aus Loxone
+gebrochen. Der Preis: Kodis EventServer ist im Heimnetz ohne Anmeldung
+erreichbar; in Kodi lässt sich beides nicht trennen.
+
+### Callback-Addon 3.2.0
+
+Kein Geister-Ereignis `unknown_started` mehr vor jedem Filmstart;
+Sendefehler erscheinen gebremst als Warnung in Kodis Protokoll; ein leeres
+Pflichtfeld verhält sich bei jedem Lesen gleich; beim Start werden die
+zurückbehaltenen Titel und der Bildschirmschoner auf einen ehrlichen Wert
+gesetzt; die Startlautstärke lässt sich mit 0 abschalten (Vorgabe bleibt 90);
+Beschreibung vollständig; Sprachdateien gültig; der Ordner `English` (bis
+Kodi 18) ist entfallen. Gemessen an einer Kodi-Attrappe, nicht an einem
+laufenden Kodi.
+
+### Nicht gemessen
+
+* Der JSON-RPC-Weg, das Addon und das Anhalten des Dienstes
+  (`KillMode=control-group`) an einem **laufenden** Kodi — am Gerät startete
+  Kodi mangels Grafiktreiber nicht.
+* Ob Kodi 21 für seinen Webserver ein Passwort verlangt. Antwortet es mit
+  401, sagt der Reiter Test das.
+* Gateway V2 im Betrieb (nur am Quelltext gelesen).
+
+### Was Sie nach dem Update tun müssen
+
+Nichts, damit das Plugin läuft. Der Statussender steht jetzt im Reiter
+**MQTT**. Wer die Ausfallerkennung aus Schritt 5 und 6 nutzen will, braucht in
+Loxone den Eingang `kodi_status_ok`. Und wer Kodi auf einem LoxBerry ohne
+Grafiktreiber betreiben will, muss den Treiber zuerst selbst einschalten.
 
 ## Version 1.2.6 – die Steuerbefehle tragen endlich eine Beschriftung
 
@@ -38,6 +214,31 @@ Zwei Kleinigkeiten in derselben Datei: im Kommentar der Eingangsvorlage stand
 „noetig" statt „nötig", und beide Vorlagen sagen jetzt in ihrem Kopf, dass
 Loxone Config beim Import neu anlegt und nichts überschreibt — zweimal
 eingelesen ergibt doppelte Bausteine.
+
+## Version 1.2.4 – der Stat-Zwischenspeicher
+
+Die Protokollkappung (512 000 Byte) stand in `bin/ko_lib.php:511`. PHP merkt
+sich aber die Antworten von `stat()`: innerhalb **eines** Prozesses sieht
+`filesize()` die erste Größe und danach nie wieder eine neue —
+`file_put_contents(…, FILE_APPEND)` macht den Eintrag nicht ungültig. Die
+Kappung fällt dann still aus.
+
+Gemessen am 29.08.2026, 20 000 Zeilen im selben Prozess:
+
+| | ohne `clearstatcache` | mit |
+|---|---|---|
+| PHP 7.4.33 | 1 220 000 Byte, **nicht gekappt** | 220 332 Byte, gekappt |
+| PHP 8.4.24 | 220 332 Byte, gekappt | 220 332 Byte, gekappt |
+
+Die beiden PHP-Fassungen verhalten sich also verschieden — und LoxBerry 3.x
+fährt 7.4. Wer nur unter 8.4 misst, sieht den Fehler nie. Folgen hatte das
+hier nicht: die Aufrufer sind kurzlebig, und ein **frischer** Prozess kappt
+richtig. Eine Funktion darf aber nicht davon abhängen, wer sie wie oft ruft.
+
+Abhilfe: `clearstatcache(true, …)` **vor** dem Tor; der zweite Parameter
+beschränkt das Leeren auf diese eine Datei. Dasselbe Muster tragen Robonect,
+Saugroboter, SignalBot, Octopus, Sprachsteuerung und WärmepumpeCloud schon
+länger — es ist am 29.08.2026 im ganzen Bestand nachgezogen worden.
 
 ## Version 1.2.3 – „Aber wie komme ich zu Kodi?"
 
@@ -646,11 +847,13 @@ an genau diese Stelle:
 
 ## Themen
 
-Die verbindliche Liste steht im Reiter *Einbindung in Loxone*; sie entsteht
-aus `ko_themen()`, und der Reiter Test hält sie gegen den Sendecode.
+Die verbindliche Liste steht im Reiter *MQTT*; sie entsteht aus
+`ko_themen()`, und der Reiter Test hält sie gegen den Sendecode.
 
-**Vom Plugin (Statussender, Cron):** `dienst`, `autostart`, `erreichbar`,
-`zeitstempel`, `herzschlag`, `wiedergabe`, `titel`
+**Vom Plugin (Statussender, Cron):** jede Minute das Lebenszeichen
+`zeitstempel` und `herzschlag` (nie retained) sowie `status/ok` (retained);
+im eingestellten Takt `dienst`, `autostart` und mit JSON-RPC `erreichbar`,
+`wiedergabe`, `titel` (retained).
 
 **Vom Kodi-Addon:** `event`, `movie_title`, `music_title`, `episode_title`,
 `unknown_title`, `screensaver`
@@ -663,10 +866,19 @@ aus `ko_themen()`, und der Reiter Test hält sie gegen den Sendecode.
 
 ## Hinweise
 
-- Kodi-Weboberfläche: Port 8080 (in Kodi unter Dienste aktivieren, für die
-  JSON-RPC-Abfrage des Plugins nötig; neuere Fassungen verlangen dort Benutzer
-  und Passwort).
-- Nach der Installation ist ein Neustart erforderlich (GPU-/Gruppenrechte).
+- **Kodi braucht einen Grafiktreiber.** Ohne `/dev/dri` startet Kodi nicht
+  (gemessen 17.09.2026 an einem LoxBerry auf DietPi). Auf dem Raspberry Pi
+  gehört dann `dtoverlay=vc4-kms-v3d` in die `config.txt`; das Plugin trägt
+  es nicht selbst ein.
+- Kodi-Weboberfläche und JSON-RPC-Abfrage: Port 8080. `advancedsettings.xml`
+  schaltet den Webserver beim Einspielen ein. Ob Kodi 21 dort Benutzer und
+  Passwort verlangt, ist nicht gemessen; der Reiter Test zeigt es. Belegt ein
+  anderes Programm den Port (am LoxBerry des Hauses: FOSHKplugin), nennt der
+  Reiter Test, wer geantwortet hat.
+- Die Steuerung aus Loxone (`tcp://…:9090`) braucht Kodis Fernsteuerung von
+  anderen Rechnern (`esallinterfaces`). Sie öffnet zugleich den EventServer
+  (UDP 9777) ohne Anmeldung im Heimnetz.
+- Nach der Installation ist ein Neustart erforderlich (Gruppenrechte).
 - `bin/kodi-rpc` ist ein Werkzeug für die **Befehlszeile**; das Plugin ruft es
   nicht auf. Verbindungsangaben über `-H`, `-P`, `-u`, `-p` oder eine eigene
   `~/.config/kodi-rpc.conf`.
@@ -842,28 +1054,3 @@ bei LoxBerry der *unangemeldete* Bereich. Dieses Plugin hat keinen Endpunkt,
 den der Miniserver ohne Anmeldung aufrufen müsste — Loxone spricht Kodi direkt
 über `tcp://…:9090` an, nicht über den LoxBerry. Einen leeren Ordner anzulegen
 brächte nichts; Git würde ihn ohnehin nicht mitführen.
-
-## Fassung 1.2.4 — der Stat-Zwischenspeicher
-Die Protokollkappung (512 000 Byte) stand in `bin/ko_lib.php:511`. PHP merkt
-sich aber die Antworten von `stat()`: innerhalb **eines** Prozesses sieht
-`filesize()` die erste Größe und danach nie wieder eine neue —
-`file_put_contents(…, FILE_APPEND)` macht den Eintrag nicht ungültig. Die
-Kappung fällt dann still aus.
-
-Gemessen am 29.08.2026, 20 000 Zeilen im selben Prozess:
-
-| | ohne `clearstatcache` | mit |
-|---|---|---|
-| PHP 7.4.33 | 1 220 000 Byte, **nicht gekappt** | 220 332 Byte, gekappt |
-| PHP 8.4.24 | 220 332 Byte, gekappt | 220 332 Byte, gekappt |
-
-Die beiden PHP-Fassungen verhalten sich also verschieden — und LoxBerry 3.x
-fährt 7.4. Wer nur unter 8.4 misst, sieht den Fehler nie. Folgen hatte das
-hier nicht: die Aufrufer sind kurzlebig, und ein **frischer** Prozess kappt
-richtig. Eine Funktion darf aber nicht davon abhängen, wer sie wie oft ruft.
-
-Abhilfe: `clearstatcache(true, …)` **vor** dem Tor; der zweite Parameter
-beschränkt das Leeren auf diese eine Datei. Dasselbe Muster tragen Robonect,
-Saugroboter, SignalBot, Octopus, Sprachsteuerung und WärmepumpeCloud schon
-länger — es ist am 29.08.2026 im ganzen Bestand nachgezogen worden.
-

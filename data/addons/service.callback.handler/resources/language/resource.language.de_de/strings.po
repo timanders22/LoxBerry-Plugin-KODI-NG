@@ -1,7 +1,7 @@
 # Kodi language file
 # Addon Name: LoxBerry Kodi Callback Handler
 # Addon id: service.callback.handler
-# Addon version: 3.1.0
+# Addon version: 3.2.0
 # Addon Provider: christiantf
 #
 # HIER STAND BIS 1.1.9 DER UNVERAENDERTE KOPF AUS DEM XBMC-UEBERSETZUNGSNETZ:
@@ -11,31 +11,23 @@
 # Fassung ist eine andere, und Fehlerberichte zu DIESER Datei gehoeren nicht
 # zu XBMC. Eine falsche Anlaufstelle ist schlimmer als keine.
 #
-"Project-Id-Version: LoxBerry-Plugin-KODI-NG
-"
-"Report-Msgid-Bugs-To: https://github.com/timanders22/LoxBerry-Plugin-KODI-NG/issues
-"
-"POT-Creation-Date: YEAR-MO-DA HO:MI+ZONE
-"
-"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE
-"
-"Last-Translator: Kodi NG LoxBerry Plugin Authors
-"
-"Language-Team: German (Germany)
-"
-"MIME-Version: 1.0
-"
-"Content-Type: text/plain; charset=UTF-8
-"
-"Content-Transfer-Encoding: 8bit
-"
-"Language: de_de
-"
-"Plural-Forms: nplurals=2; plural=(n != 1);
-"
-
+# BIS 3.1.0 WAR DER KOPF SELBST UNGUELTIG: die Kopfzeilen standen VOR
+# msgid "" und jede Zeichenkette lief ueber einen Zeilenumbruch, statt mit \n
+# zu enden. Nach PO-Grammatik gehoeren sie als Fortsetzung unter msgstr "".
+#
 msgid ""
 msgstr ""
+"Project-Id-Version: LoxBerry-Plugin-KODI-NG\n"
+"Report-Msgid-Bugs-To: https://github.com/timanders22/LoxBerry-Plugin-KODI-NG/issues\n"
+"POT-Creation-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: Kodi NG LoxBerry Plugin Authors\n"
+"Language-Team: German (Germany)\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: de_de\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
 msgctxt "#32000"
 msgid "send status to:"
@@ -52,6 +44,10 @@ msgstr "UDP-Port (Miniserver):"
 msgctxt "#32003"
 msgid "Volume on Kodi start:"
 msgstr "Lautstärke beim Start von Kodi:"
+
+msgctxt "#32004"
+msgid "Start volume: 0 = leave the volume unchanged"
+msgstr "Startlautstärke: 0 = Lautstärke nicht verändern"
 
 msgctxt "#32010"
 msgid "MQTT (LoxBerry MQTT Gateway)"

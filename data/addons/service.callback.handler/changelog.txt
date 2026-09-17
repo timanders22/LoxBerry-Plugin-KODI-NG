@@ -26,3 +26,26 @@ v3.1.0
 - Die Liste THEMEN steht ausgeschrieben im Quelltext, damit die Pruefzeile
   im Reiter Test des Plugins sie gegen ihre eigene Tabelle halten kann.
 
+v3.2.0
+- Kein "unknown_started" mehr vor jedem Filmstart. Kennt Kodi die Medienart
+  bei onPlayBackStarted noch nicht, wird auf onAVStarted gewartet (spaetestens
+  30 s, dann mit der bekannten Art). unknown_* heisst weiter: Kodi spielt
+  etwas, das es nicht einordnet.
+- Sendefehler stehen als Warnung im Kodi-Protokoll: der erste je Sendeweg,
+  danach hoechstens alle 600 s eine mit der Zahl der uebrigen, und eine Zeile,
+  wenn der Weg wieder geht.
+- Einstellungen kommen nur noch aus Kodi. Ein leeres Pflichtfeld (Port,
+  MQTT-Thema) verhielt sich beim ersten Lesen anders als nach einer Aenderung;
+  jetzt wird es beanstandet, und der Weg sendet nicht.
+- Beim Start werden die zurueckbehaltenen MQTT-Themen gesetzt: Titel auf den
+  laufenden Titel oder "-", screensaver auf den Zustand, den Kodi meldet.
+  Sonst blieben sie nach einem Stromausfall fuer immer stehen.
+- Startlautstaerke 0 = beim Start nicht veraendern (Regler 0..100, Vorgabe
+  weiterhin 90).
+- Beschreibung in addon.xml nennt alle 24 UDP-Zeichenketten und alle Themen.
+- strings.po: gueltiger Kopf. Ordner resources/language/English entfernt
+  (Kodi 19+ liest resource.language.en_gb).
+
+- Startlautstaerke "nan" oder "inf" aus einer von Hand bearbeiteten
+  settings.xml beendete das Addon beim Start; jetzt wie jeder andere
+  unzulaessige Wert beanstandet.

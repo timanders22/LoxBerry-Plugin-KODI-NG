@@ -181,6 +181,42 @@ if (!function_exists('ko_vorgaben')) {
     }
 }
 
+/** Ist das ein zulaessiger Wirt fuer eine Adresse, die dieses Plugin baut?
+ *
+ *  Drei Formen und nichts sonst: IPv4, ein Rechnername aus Buchstaben,
+ *  Ziffern, Punkt und Bindestrich, oder IPv6 in eckigen Klammern. Kein
+ *  Schraegstrich, kein Fragezeichen, kein @ und kein Doppelpunkt ausserhalb
+ *  der Klammern - jedes davon verschiebt in http://<wirt>:<port>/ das Ziel. */
+if (!function_exists('ko_wirt_gueltig')) {
+    function ko_wirt_gueltig($w)
+    {
+        $w = (string) $w;
+        if ($w === '' || strlen($w) > 253) { return false; }
+        // \z statt $: $ laesst einen Zeilenumbruch am Ende durch
+        // ("kodi.local" mit angehaengtem Zeilenumbruch galt als gueltig -
+        // gegengelesen 17.09.2026).
+        if (preg_match('/^\[[0-9A-Fa-f:.]{2,45}\]\z/', $w)) { return true; }
+        // Unterstrich: kein gueltiger DNS-Name, aber in Heimnetzen als
+        // Rechnername verbreitet und im URL-Wirt ohne Wirkung auf das Ziel.
+        return (bool) preg_match('/^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})\z/', $w);
+    }
+}
+
+/** IPv6 ohne Klammern ("::1", "fd00::1") in die Klammerform bringen, alles
+ *  andere unveraendert lassen. Bis 1.2.6 wurde "::1" angenommen und steht
+ *  deshalb womoeglich noch in einer kodi.json; die Positivliste allein
+ *  haette solche Anlagen bei jedem Speichern beanstandet. */
+if (!function_exists('ko_wirt_form')) {
+    function ko_wirt_form($w)
+    {
+        $w = trim((string) $w);
+        if (substr_count($w, ':') >= 2 && preg_match('/^[0-9A-Fa-f:.]{2,45}\z/', $w)) {
+            return '[' . $w . ']';
+        }
+        return $w;
+    }
+}
+
 /** Werte pruefen - dieselbe Pruefung fuer Formular UND Sicherung.
  *
  *  Zwei getrennte Pruefungen waeren zwei Wahrheiten: das Formular wies bisher
@@ -206,8 +242,17 @@ if (!function_exists('ko_wert_pruefen')) {
                 $w = trim($w, '/');
                 return preg_match('#^[A-Za-z0-9._/-]{1,64}$#', $w) ? $w : null;
             case 'kodi_host':
-                $w = preg_replace('/[\x00-\x1F\x7F"\'\s]/', '', $w);
-                return $w === '' ? null : $w;
+                /* Seit 1.2.7 eine Positivliste - bis 1.2.6 wurden nur
+                 * Steuerzeichen, Anfuehrungszeichen und Leerraum entfernt.
+                 * Damit gingen / ? # @ : durch, und aus
+                 * "nachbar.example.net/pfad?a=" wurde eine Anfrage SAMT
+                 * Authorization-Kopf an einen fremden Wirt und Pfad. Ein
+                 * unzulaessiger Wert wird abgewiesen und gemeldet, nicht
+                 * zurechtgebogen. Dieselbe Beurteilung gilt beim Lesen
+                 * (ko_rpc), denn eine von Hand bearbeitete kodi.json kommt am
+                 * Formular vorbei. */
+                $w = ko_wirt_form($w);
+                return ko_wirt_gueltig($w) ? $w : null;
             case 'kodi_port':
                 // ctype_digit() steckt in einer Erweiterung, preg_match nicht.
                 if (!preg_match('/^[0-9]{1,5}$/', $w)) { return null; }
@@ -629,31 +674,151 @@ if (!function_exists('ko_kodi_paket')) {
         static $i = null;
         if ($i !== null) { return $i; }
 
+        /* ZUERST DIE EINGESPIELTE UNIT, dann die Paketkopie.
+         *
+         * Bis 1.2.6 wurde nur die Paketkopie unter data/ gelesen. Ob die Unit
+         * ueberhaupt bei systemd angekommen ist, fragte niemand - hatte
+         * postroot.sh "<FAIL> data/kodi_ng.service fehlt" gemeldet, sagte
+         * die Oberflaeche trotzdem "gestoppt" statt "es gibt keinen Dienst".
+         * 'unit' sagt deshalb, WOHER die Zeile stammt. */
         $exec = '';
-        $unit = ko_lesen(ko_paths()['data'] . '/kodi_ng.service');
-        if ($unit === '') {
-            // Im entpackten Archiv liegt sie eine Ebene hoeher.
-            $unit = ko_lesen(dirname(__DIR__) . '/data/kodi_ng.service');
+        $herkunft = '';
+        $unit = ko_lesen('/etc/systemd/system/kodi_ng.service');
+        if ($unit !== '') {
+            $herkunft = 'eingespielt';
+        } else {
+            $unit = ko_lesen(ko_paths()['data'] . '/kodi_ng.service');
+            if ($unit === '') {
+                // Im entpackten Archiv liegt sie eine Ebene hoeher.
+                $unit = ko_lesen(dirname(__DIR__) . '/data/kodi_ng.service');
+            }
+            if ($unit !== '') { $herkunft = 'paketkopie'; }
         }
         if (preg_match('/^ExecStart=(\S+)/m', $unit, $m)) { $exec = $m[1]; }
 
         $paket = '';
-        $roh = trim((string) @shell_exec(
-            'dpkg-query -W -f=\'${Status}|${Version}\' kodi 2>/dev/null'));
-        /* "install ok installed" ist der einzige Zustand, der zaehlt.
-         * "deinstall ok config-files" heisst entfernt, die Konfiguration liegt
-         * noch da - das ist NICHT installiert. */
-        if (strpos($roh, 'install ok installed') === 0) {
-            $t = explode('|', $roh);
-            $paket = isset($t[1]) && trim($t[1]) !== '' ? trim($t[1]) : '?';
+        $zustand = '';
+        // dpkg gibt es nur auf Linux; unter Windows (Pruefstand) schrieb cmd
+        // bei jedem Seitenaufbau eine Fehlermeldung auf die Fehlerausgabe.
+        $roh = DIRECTORY_SEPARATOR === '/' ? trim((string) @shell_exec(
+            'dpkg-query -W -f=\'${Status}|${Version}\' kodi 2>/dev/null')) : '';
+        /* ${Status} hat DREI Woerter: Wunsch, Kennzeichen, Zustand. Massgeblich
+         * ist das DRITTE. Bis 1.2.6 stand hier ein Vergleich auf den
+         * Zeilenanfang "install ok installed" - damit galt "hold ok installed"
+         * (nach apt-mark hold kodi) als NICHT installiert, obwohl Kodi da ist.
+         * "deinstall ok config-files" ist weiterhin nicht installiert: dort
+         * steht im dritten Wort config-files. Gemessen am Geraet 17.09.2026:
+         * "install ok installed|3:21.3+dfsg-1+rpt3". */
+        $t = explode('|', $roh, 2);
+        $woerter = preg_split('/\s+/', trim($t[0]));
+        if (count($woerter) === 3) {
+            $zustand = $woerter[2];
+            if ($zustand === 'installed') {
+                $paket = isset($t[1]) && trim($t[1]) !== '' ? trim($t[1]) : '?';
+            }
         }
 
         $i = array(
-            'exec'  => $exec,
-            'datei' => ($exec !== '' && @is_file($exec)),
-            'paket' => $paket,
+            'exec'    => $exec,
+            'datei'   => ($exec !== '' && @is_file($exec)),
+            'paket'   => $paket,
+            'zustand' => $zustand,
+            'unit'    => $herkunft,
         );
         return $i;
+    }
+}
+
+/**
+ * Kann Kodi auf diesem Geraet ueberhaupt ein Bild erzeugen?
+ *
+ * GEMESSEN AM 17.09.2026, an einem LoxBerry 4 auf DietPi (Raspberry Pi 4):
+ * Kodi 21 startet dort nicht. Im Protokoll steht "CDRMUtils::OpenDrm - no drm
+ * devices found" und "unable to init windowing system", kodi.bin endet mit
+ * 255. Ursache: es gibt kein /dev/dri - der KMS-Treiber des Pi ist nicht
+ * geladen (in der config.txt fehlt dtoverlay=vc4-kms-v3d). Die Oberflaeche
+ * sagte dazu eine Woche lang nur "gestoppt".
+ *
+ * Das Plugin SCHALTET DEN TREIBER NICHT SELBST EIN: das ist ein Eingriff in
+ * die Bootkonfiguration mit Neustart, der das ganze Geraet betrifft, und die
+ * Entscheidung des Hausherrn. Es sagt nur, was fehlt.
+ *
+ * Rueckgabe: array('stand' => 1|0|-1, 'geraete' => array(...))
+ *   1  mindestens ein /dev/dri/card*
+ *   0  kein /dev/dri oder keine Karte darin
+ *  -1  nicht feststellbar (kein Linux unter den Fuessen)
+ */
+if (!function_exists('ko_bildausgabe')) {
+    function ko_bildausgabe()
+    {
+        if (DIRECTORY_SEPARATOR !== '/' || !is_dir('/dev')) {
+            return array('stand' => -1, 'geraete' => array());
+        }
+        $karten = is_dir('/dev/dri') ? (glob('/dev/dri/card*') ?: array()) : array();
+        return array('stand' => $karten ? 1 : 0, 'geraete' => $karten);
+    }
+}
+
+/**
+ * Warum steht der Kodi-Dienst? systemd weiss es, und fragen darf jeder.
+ *
+ * `systemctl show` braucht keine Rechte. Bis 1.2.6 kannte die Oberflaeche nur
+ * "laeuft" und "gestoppt" - ein Kodi, das dreimal abgestuerzt war, sah genauso
+ * aus wie eines, das jemand angehalten hat.
+ *
+ * Rueckgabe: null (nicht feststellbar) oder array mit
+ *   aktiv     active|inactive|failed|activating|...
+ *   ergebnis  success|exit-code|signal|core-dump|start-limit-hit|...
+ *   status    Rueckgabewert des letzten Laufs (ExecMainStatus)
+ *   seit      Zeitpunkt des letzten Zustandswechsels, wie systemd ihn schreibt
+ */
+if (!function_exists('ko_dienst_lage')) {
+    function ko_dienst_lage($neu = false)
+    {
+        static $l = null;
+        static $gefragt = false;
+        if ($gefragt && !$neu) { return $l; }
+        $gefragt = true;
+        $l = null;
+        if (DIRECTORY_SEPARATOR !== '/') { return $l; }
+        $roh = (string) @shell_exec('systemctl show kodi_ng -p ActiveState -p Result '
+            . '-p ExecMainStatus -p StateChangeTimestamp --no-pager 2>/dev/null');
+        $w = array();
+        foreach (preg_split('/\R/', $roh) as $z) {
+            if (strpos($z, '=') === false) { continue; }
+            list($k, $v) = explode('=', $z, 2);
+            $w[trim($k)] = trim($v);
+        }
+        if (!isset($w['ActiveState']) || $w['ActiveState'] === '') { return $l; }
+        $l = array(
+            'aktiv'    => $w['ActiveState'],
+            'ergebnis' => isset($w['Result']) ? $w['Result'] : '',
+            'status'   => isset($w['ExecMainStatus']) ? $w['ExecMainStatus'] : '',
+            'seit'     => isset($w['StateChangeTimestamp']) ? $w['StateChangeTimestamp'] : '',
+        );
+        return $l;
+    }
+}
+
+/**
+ * Der Zustand des Kodi-Dienstes als EIN Wort - fuer Kachel und Meldungen.
+ *
+ * Vier Zustaende, nicht zwei: laeuft, abgestuerzt, nicht installiert,
+ * gestoppt - und ein Fragezeichen, wenn der Helfer schweigt. Bis 1.2.6 sah
+ * "abgestuerzt" aus wie "gestoppt".
+ */
+if (!function_exists('ko_dienst_text')) {
+    function ko_dienst_text($st, $dl)
+    {
+        if (!$st) { return '?'; }
+        if (!empty($st['kodistarted'])) { return ko_t('ALLG.LAEUFT'); }
+        $kp = ko_kodi_paket();
+        if ($kp['exec'] !== '' && !$kp['datei']) { return ko_t('ALLG.NICHT_INSTALLIERT'); }
+        if (is_array($dl) && ($dl['aktiv'] === 'failed'
+            || ($dl['ergebnis'] !== '' && $dl['ergebnis'] !== 'success'))) {
+            return sprintf(ko_t('ALLG.ABGESTUERZT'), $dl['status'] !== '' ? $dl['status'] : '?');
+        }
+        return ko_t('ALLG.GESTOPPT');
     }
 }
 
@@ -744,13 +909,37 @@ if (!function_exists('ko_kodi_url')) {
         $host = trim((string) $cfg['kodi_host']);
         $eigen = array('127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0');
         if ($host !== '' && !in_array(strtolower($host), $eigen, true)) {
-            return 'http://' . $host . ':' . $port . '/';
+            return 'http://' . ko_wirt_form($host) . ':' . $port . '/';
         }
 
         // Kodi laeuft auf diesem LoxBerry - siehe ko_sicht_wirt().
         $host = ko_sicht_wirt();
         if ($host === '') { return ''; }
         return 'http://' . $host . ':' . $port . '/';
+    }
+}
+
+/**
+ * Unter welchem Wirt erreicht der MINISERVER Kodis TCP-Schnittstelle (9090)?
+ *
+ * EINE Stelle fuer die Anzeige im Reiter "Einbindung in Loxone" und fuer die
+ * Vorlage der Steuerbefehle. Steht kodi_host auf der Rueckschleife, laeuft
+ * Kodi auf diesem LoxBerry, und genommen wird der Wirt, unter dem der
+ * Anwender die Seite sieht (Positivliste, IPv6 in Klammern). Ist keiner zu
+ * ermitteln, bleibt es beim Rechnernamen "loxberry" - die Oberflaeche sagt
+ * dazu, dass er zu pruefen ist.
+ */
+if (!function_exists('ko_steuer_wirt')) {
+    function ko_steuer_wirt()
+    {
+        $cfg = ko_config();
+        $host = trim((string) $cfg['kodi_host']);
+        $eigen = array('127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0');
+        if ($host !== '' && !in_array(strtolower($host), $eigen, true) && ko_wirt_gueltig(ko_wirt_form($host))) {
+            return ko_wirt_form($host);
+        }
+        $w = ko_sicht_wirt();
+        return $w !== '' ? $w : 'loxberry';
     }
 }
 
@@ -856,6 +1045,27 @@ if (!function_exists('ko_mqtt_wert_saeubern')) {
 }
 
 /**
+ * Retained oder nicht - je THEMA, aus der Themenliste.
+ *
+ * Hausstandard seit 03.09.2026: Zustaende retained, das Lebenszeichen NIE.
+ * Bis 1.2.6 entschied ko_mqtt_publish() das am AUFRUF und schickte alles
+ * retained - auch zeitstempel und herzschlag. Ein zurueckbehaltenes
+ * Lebenszeichen zeigt nach dem Tod des Senders fuer immer "lebt".
+ *
+ * Ein Thema, das nicht in der Liste steht, geht NICHT retained hinaus: es darf
+ * nicht auf Dauer im Broker stehen bleiben.
+ */
+if (!function_exists('ko_thema_retain')) {
+    function ko_thema_retain($name)
+    {
+        foreach (ko_themen() as $t) {
+            if ($t['name'] === $name) { return !empty($t['retain']); }
+        }
+        return false;
+    }
+}
+
+/**
  * Werte per MQTT veroeffentlichen - ueber den UDP-Relay des Gateways.
  *
  * stream_socket_client() statt socket_create(): die Socket-Erweiterung ist
@@ -864,43 +1074,101 @@ if (!function_exists('ko_mqtt_wert_saeubern')) {
  * daran nichts geaendert. Bis 1.1.9 stand hier socket_create(), und
  * php-sockets stand nicht in dpkg/apt.
  *
- * Rueckgabe: array(gesendet, meldung)
+ * $trocken = true geht DENSELBEN Weg bis vor den Socket: Port ermitteln,
+ * Zeilen bauen, retain oder publish entscheiden - nur das Senden unterbleibt.
+ * Bis 1.2.6 verliess der Trockenlauf das Skript VOR dieser Funktion und
+ * konnte "kein UDP-Eingang" gar nicht zeigen.
+ *
+ * Rueckgabe: array(uebergeben, meldung, versucht, zeilen)
+ *   versucht   Zahl der Werte, die nicht null waren
+ *   uebergeben Zahl der Zeilen, die der Kern angenommen hat (im Trockenlauf 0)
+ *   zeilen     die gebauten Zeilen - fuer den Trockenlauf und die Pruefung
  */
 if (!function_exists('ko_mqtt_publish')) {
-    function ko_mqtt_publish($paare, $retain = true)
+    function ko_mqtt_publish($paare, $trocken = false)
     {
-        $udp = ko_mqtt_port();
-        if (!$udp) {
-            ko_log('MQTT: kein UDP-Eingang des Gateways ermittelbar - nichts gesendet.');
-            return array(0, 'kein UDP-Eingang');
-        }
         $cfg = ko_config();
         $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
+        $zeilen = array();
+        foreach ($paare as $k => $v) {
+            // null wird uebersprungen, '' und '0' NICHT: eine leere Zeichenkette
+            // ist ein Wert, null ist keiner.
+            if ($v === null) { continue; }
+            $wert = ko_mqtt_wert_saeubern($v);
+            /* Ein leerer Wert geht nie retained hinaus - eine leere Nutzlast
+             * LOESCHT ein zurueckbehaltenes Thema (Regeln/07). ko_mqtt_wert_
+             * saeubern() macht aus leer zwar "-", die Zeile hier haelt es
+             * trotzdem fuer sich fest: eine Absicherung, die von der anderen
+             * abhaengt, ist keine. */
+            $befehl = (ko_thema_retain((string) $k) && $wert !== '') ? 'retain' : 'publish';
+            $zeilen[] = $befehl . ' ' . $prefix . '/' . $k . ' ' . $wert;
+        }
+        $versucht = count($zeilen);
+
+        /* Diese Funktion PROTOKOLLIERT NICHT SELBST. Das tut der Aufrufer, und
+         * zwar gebremst: bis 1.2.7 schrieb sie bei fehlendem UDP-Eingang aus
+         * dem minuetlichen Cron jede Minute eine Zeile - gemessen am
+         * Pruefstand: +4 Zeilen in drei Laeufen, trotz Bremse im Sender. */
+        $udp = ko_mqtt_port();
+        if (!$udp) {
+            return array(0, 'kein UDP-Eingang', $versucht, $zeilen);
+        }
+        if ($trocken) { return array(0, '', $versucht, $zeilen); }
+
         $fehler = 0;
+        $meldung = '';
         $fp = @stream_socket_client('udp://127.0.0.1:' . $udp, $fehler, $meldung, 2);
         if ($fp === false) {
-            ko_log('MQTT: UDP-Relay 127.0.0.1:' . $udp . ' nicht erreichbar - ' . $meldung);
-            return array(0, (string) $meldung);
+            return array(0, 'UDP-Relay 127.0.0.1:' . $udp . ': ' . (string) $meldung, $versucht, $zeilen);
         }
         stream_set_timeout($fp, 2);
         /* UDP ist verbindungslos. stream_socket_client() gelingt auch dann,
          * wenn am Zielport niemand lauscht, und fwrite() meldet nur, dass der
          * Kern das Paket angenommen hat - nicht, dass es jemand bekommen hat.
-         * Der Zaehler unten zaehlt also UEBERGEBENE Werte. Ob sie ankommen,
-         * beantwortet allein der MQTT Finder; die Themen-Tabelle im Reiter
-         * Einbindung sagt deshalb, wo man nachsieht. */
-        $befehl = $retain ? 'retain' : 'publish';
+         * Gemessen am 17.09.2026: vier Zeilen "uebergeben", im Broker kam in
+         * 100 Sekunden keine an, weil der UDP-Eingang des Gateways zwei
+         * Megabyte hinterherhing. Der Zaehler zaehlt also UEBERGEBENE Werte;
+         * ob sie ankommen, beantwortet allein der MQTT Finder. */
         $n = 0;
-        foreach ($paare as $k => $v) {
-            // null wird uebersprungen, '' und '0' NICHT: eine leere Zeichenkette
-            // ist ein Wert, null ist keiner.
-            if ($v === null) { continue; }
-            $msg = $befehl . ' ' . $prefix . '/' . $k . ' ' . ko_mqtt_wert_saeubern($v);
+        foreach ($zeilen as $msg) {
             if (@fwrite($fp, $msg) !== false) { $n++; }
         }
         fclose($fp);
-        ko_log('MQTT: ' . $n . ' Werte an ' . $prefix . '/ (Gateway-Relay 127.0.0.1:' . $udp . ')');
-        return array($n, '');
+        return array($n, $n === $versucht ? '' : ($versucht - $n) . ' Zeilen nicht uebergeben',
+                     $versucht, $zeilen);
+    }
+}
+
+/**
+ * Zurueckbehaltene Altlasten im Broker loeschen.
+ *
+ * Bis 1.2.6 gingen zeitstempel und herzschlag RETAINED hinaus. Ein spaeteres
+ * "publish" ersetzt den zurueckbehaltenen Wert NICHT - er bliebe fuer immer
+ * im Broker und zeigte nach dem Tod des Senders "lebt". Geloescht wird ein
+ * zurueckbehaltenes Thema mit einer LEEREN Nutzlast und retain (Regeln/07,
+ * mqttgateway.pl "Delete ... because of empty message"; am Broker gemessen
+ * 14.09.2026). Deshalb geht die Zeile hier an ko_mqtt_wert_saeubern()
+ * vorbei, das leer zu "-" machen wuerde.
+ *
+ * Rueckgabe: Zahl der uebergebenen Zeilen.
+ */
+if (!function_exists('ko_mqtt_retain_loeschen')) {
+    function ko_mqtt_retain_loeschen($namen)
+    {
+        $udp = ko_mqtt_port();
+        if (!$udp) { return 0; }
+        $cfg = ko_config();
+        $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
+        $fehler = 0;
+        $meldung = '';
+        $fp = @stream_socket_client('udp://127.0.0.1:' . $udp, $fehler, $meldung, 2);
+        if ($fp === false) { return 0; }
+        $n = 0;
+        foreach ($namen as $name) {
+            if (@fwrite($fp, 'retain ' . $prefix . '/' . $name . ' ') !== false) { $n++; }
+        }
+        fclose($fp);
+        return $n;
     }
 }
 
@@ -918,42 +1186,100 @@ if (!function_exists('ko_mqtt_publish')) {
  * zahl:   true, wenn das Thema in die Vorlage der virtuellen Eingaenge gehoert.
  *         Textthemen bekommen keinen virtuellen Eingang - auch nicht im
  *         XML-Weg.
+ * retain: true = der Zustand bleibt im Broker stehen (Regeln/07, Hausstandard
+ *         seit 03.09.2026). Nur fuer die Themen des PLUGINS wirksam - die des
+ *         Addons entscheidet das Addon selbst; dort steht der Wert nur, damit
+ *         die Tabelle ihn nennen kann.
+ * leben:  true = Teil des Lebenszeichens. Geht bei JEDEM Cron-Durchgang
+ *         hinaus und ist nie retained; die Pruefzeile im Reiter Test haelt
+ *         beides gegeneinander.
+ *
+ * zeitstempel und herzschlag heissen seit 1.2.0 so und behalten ihren Namen
+ * (an ihnen haengen Eingaenge in fremden Anlagen). Sie sind das "ts" und der
+ * "zaehler" des Hausstandards. status/ok ist seit 1.2.7 NEU daneben: 1, wenn
+ * der letzte Lauf wirklich gemessen hat - ein Zeitstempel allein sagt nur,
+ * DASS der Sender lief, nicht dass er etwas wusste.
  */
 if (!function_exists('ko_themen')) {
     function ko_themen()
     {
         return array(
-            array('name' => 'dienst',      'quelle' => 'plugin', 'zahl' => true,
+            array('name' => 'dienst',      'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
                   'min' => '0', 'max' => '1',          'schl' => 'T_DIENST',      'wschl' => 'V_01'),
-            array('name' => 'autostart',   'quelle' => 'plugin', 'zahl' => true,
+            array('name' => 'autostart',   'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
                   'min' => '0', 'max' => '1',          'schl' => 'T_AUTOSTART',   'wschl' => 'V_01'),
-            array('name' => 'erreichbar',  'quelle' => 'plugin', 'zahl' => true,
+            array('name' => 'erreichbar',  'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
                   'min' => '0', 'max' => '1',          'schl' => 'T_ERREICHBAR',  'wschl' => 'V_01'),
-            array('name' => 'zeitstempel', 'quelle' => 'plugin', 'zahl' => true,
+            array('name' => 'zeitstempel', 'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
                   'min' => '0', 'max' => '2147483647', 'schl' => 'T_ZEIT',        'wschl' => 'V_ZEIT'),
-            array('name' => 'herzschlag',  'quelle' => 'plugin', 'zahl' => true,
+            array('name' => 'herzschlag',  'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
                   'min' => '0', 'max' => '2147483647', 'schl' => 'T_HERZ',        'wschl' => 'V_HERZ'),
-            array('name' => 'wiedergabe',  'quelle' => 'plugin', 'zahl' => false,
+            /* status/ok geht wie das Lebenszeichen bei jedem Durchgang hinaus,
+             * ist aber ein ZUSTAND (retained): eine zurueckbehaltene 0 sagt
+             * nach einem Neustart des Miniservers das Richtige. Deshalb
+             * leben=false - leben=true heisst "nie retained". */
+            array('name' => 'status/ok',   'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
+                  'min' => '0', 'max' => '1',          'schl' => 'T_OK',          'wschl' => 'V_OK'),
+            array('name' => 'wiedergabe',  'quelle' => 'plugin', 'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_WIEDERGABE',  'wschl' => 'V_WIEDERGABE'),
-            array('name' => 'titel',       'quelle' => 'plugin', 'zahl' => false,
+            array('name' => 'titel',       'quelle' => 'plugin', 'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_TITEL',       'wschl' => 'V_TEXT'),
-            array('name' => 'event',       'quelle' => 'addon',  'zahl' => false,
+            array('name' => 'event',       'quelle' => 'addon',  'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_EVENT',       'wschl' => 'V_EVENT'),
-            array('name' => 'movie_title', 'quelle' => 'addon',  'zahl' => false,
+            array('name' => 'movie_title', 'quelle' => 'addon',  'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_MOVIETITLE',  'wschl' => 'V_TEXT'),
-            array('name' => 'music_title', 'quelle' => 'addon',  'zahl' => false,
+            array('name' => 'music_title', 'quelle' => 'addon',  'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_MUSICTITLE',  'wschl' => 'V_TEXT'),
-            array('name' => 'episode_title', 'quelle' => 'addon', 'zahl' => false,
+            array('name' => 'episode_title', 'quelle' => 'addon', 'zahl' => false, 'retain' => true, 'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_EPISODETITLE', 'wschl' => 'V_TEXT'),
             /* Es gibt sie wirklich: playing_type() im Addon liefert 'unknown',
              * wenn Kodi etwas abspielt und selbst nicht sagt was. Dann geht
              * unknown_title hinaus. Die Zeile steht hier, weil ein Thema, das
              * ankommt und in keiner Tabelle steht, den Anwender ratlos laesst. */
-            array('name' => 'unknown_title', 'quelle' => 'addon', 'zahl' => false,
+            array('name' => 'unknown_title', 'quelle' => 'addon', 'zahl' => false, 'retain' => true, 'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_UNKNOWNTITLE', 'wschl' => 'V_TEXT'),
-            array('name' => 'screensaver', 'quelle' => 'addon',  'zahl' => false,
+            array('name' => 'screensaver', 'quelle' => 'addon',  'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_SCREENSAVER', 'wschl' => 'V_ONOFF'),
         );
+    }
+}
+
+/**
+ * Gehoert das Thema in die Vorlage der virtuellen Eingaenge?
+ *
+ * EINE Stelle fuer die Tabelle im Reiter und fuer die erzeugte Datei - bis
+ * 1.2.6 prueften beide verschieden viele Bedingungen.
+ *
+ * erreichbar nur bei eingeschaltetem JSON-RPC. Ab Werk ist die Abfrage aus;
+ * bis 1.2.6 legte die Vorlage den Eingang trotzdem mit DefVal 0 an, und in
+ * Loxone stand dauerhaft "Kodi antwortet nicht" statt "danach fragt niemand"
+ * (Regeln/07: die Vorlage legt nur an, was auch geliefert wird).
+ */
+if (!function_exists('ko_thema_in_vorlage')) {
+    function ko_thema_in_vorlage($t, $cfg = null)
+    {
+        if ($cfg === null) { $cfg = ko_config(); }
+        if (empty($t['zahl']) || $t['quelle'] !== 'plugin') { return false; }
+        if ($t['name'] === 'erreichbar' && (string) $cfg['rpc_ein'] !== '1') { return false; }
+        return true;
+    }
+}
+
+/** Wie viele Themen sendet das Plugin mit der jetzigen Einstellung?
+ *  Die Zahl wird GEZAEHLT, nicht in einen Text geschrieben - "die sieben
+ *  Themen" stand bis 1.2.6 in vier Saetzen, gesendet wurden ab Werk vier. */
+if (!function_exists('ko_themen_plugin_zahl')) {
+    function ko_themen_plugin_zahl($cfg = null)
+    {
+        if ($cfg === null) { $cfg = ko_config(); }
+        $n = 0;
+        foreach (ko_themen() as $t) {
+            if ($t['quelle'] !== 'plugin') { continue; }
+            if (in_array($t['name'], array('erreichbar', 'wiedergabe', 'titel'), true)
+                && (string) $cfg['rpc_ein'] !== '1') { continue; }
+            $n++;
+        }
+        return $n;
     }
 }
 
@@ -976,7 +1302,10 @@ if (!function_exists('ko_rpc')) {
     function ko_rpc($methode, $params = null, $zeit = 4)
     {
         $cfg = ko_config();
-        $host = $cfg['kodi_host'] !== '' ? $cfg['kodi_host'] : '127.0.0.1';
+        $host = $cfg['kodi_host'] !== '' ? ko_wirt_form($cfg['kodi_host']) : '127.0.0.1';
+        // Dieselbe Beurteilung wie beim Speichern: eine von Hand bearbeitete
+        // kodi.json kommt am Formular vorbei.
+        if (!ko_wirt_gueltig($host)) { return array(false, 'Adresse unzulaessig'); }
         $port = (int) $cfg['kodi_port'];
         if ($port < 1 || $port > 65535) { return array(false, 'Port unzulaessig'); }
 
@@ -1000,6 +1329,12 @@ if (!function_exists('ko_rpc')) {
             // false zurueck - der Statuscode waere dann nicht mehr lesbar,
             // und "nicht erreichbar" saehe genauso aus wie "abgelehnt".
             'ignore_errors' => true,
+            /* KEINER UMLEITUNG FOLGEN. file_get_contents folgt ab Werk bis zu
+             * zwanzigmal und schickt den Authorization-Kopf jedes Mal mit
+             * (Regeln/03, "Beide Abrufwege"). Kodi leitet /jsonrpc nie um;
+             * wer umleitet, ist nicht Kodi. */
+            'follow_location' => 0,
+            'max_redirects'   => 1,
         )));
         $adresse = 'http://' . $host . ':' . $port . '/jsonrpc';
 
@@ -1016,28 +1351,46 @@ if (!function_exists('ko_rpc')) {
          * restore_error_handler() setzt den vorherigen Behandler zurueck -
          * nicht ueberschreiben, sonst waere die Oberflaeche danach fuer ALLE
          * Fehler blind. */
+        /* 'timeout' gilt nur fuer das LESEN. Fuer den Verbindungsaufbau gilt
+         * default_socket_timeout, ab Werk 60 Sekunden (Regeln/03, gemessen
+         * 8134 ms bei toter Gegenstelle). Deshalb fuer genau diesen Aufruf
+         * gesetzt und danach zurueckgestellt - nicht dauerhaft verstellt. */
+        $vorher_zeit = ini_get('default_socket_timeout');
+        @ini_set('default_socket_timeout', (string) (int) $zeit);
         set_error_handler(function () { return true; });
         $antwort = file_get_contents($adresse, false, $ctx);
         restore_error_handler();
+        @ini_set('default_socket_timeout', (string) $vorher_zeit);
 
         if ($antwort === false) {
             return array(false, 'keine Antwort von ' . $host . ':' . $port);
         }
         $code = 0;
+        $server = '';
         if (isset($http_response_header) && is_array($http_response_header)) {
             foreach ($http_response_header as $z) {
                 if (preg_match('#^HTTP/\S+\s+(\d{3})#', $z, $m)) { $code = (int) $m[1]; }
+                if (preg_match('#^Server:\s*(.+)$#i', $z, $m)) { $server = trim($m[1]); }
             }
         }
+        /* WER HAT GEANTWORTET? Gemessen am 17.09.2026: auf dem LoxBerry des
+         * Hauses lauscht auf 8080 nicht Kodi, sondern FOSHKplugin
+         * ("Server: FOSHKplugin/v0.10 ... Python/3.13.5", HTTP 501). Ein
+         * nacktes "HTTP 501" schickte den Anwender zu Kodi, das damit nichts
+         * zu tun hat (Regeln/04, "Meldungen sagen, wer geantwortet hat"). */
+        $wer = $server !== '' ? ' - geantwortet hat "' . substr($server, 0, 80) . '"' : '';
         if ($code === 401) {
-            return array(false, 'HTTP 401 - Kodi verlangt Benutzer und Passwort');
+            return array(false, 'HTTP 401 - Kodi verlangt Benutzer und Passwort' . $wer);
+        }
+        if ($code >= 300 && $code < 400) {
+            return array(false, 'HTTP ' . $code . ' - Umleitung, der nicht gefolgt wird; Kodi leitet nicht um' . $wer);
         }
         if ($code >= 400) {
-            return array(false, 'HTTP ' . $code);
+            return array(false, 'HTTP ' . $code . $wer);
         }
         $d = json_decode($antwort, true);
         if (!is_array($d)) {
-            return array(false, 'Antwort ist kein JSON: ' . substr(trim($antwort), 0, 120));
+            return array(false, 'Antwort ist kein JSON' . $wer . ': ' . substr(trim($antwort), 0, 120));
         }
         if (isset($d['error'])) {
             /* Verlustfrei zusammensetzen statt einen Schluessel zu raten:
@@ -1331,12 +1684,41 @@ if (!function_exists('ko_sicherung_text')) {
             $t .= $k . ' ' . ($w === '' ? '-' : ko_sicherung_wert($w)) . "\n";
         }
 
-        $auto = isset($st['kodiautostart']) ? (int) $st['kodiautostart'] : 0;
-        $t .= 'autostart ' . $auto . "\n";
+        /* Der Autostart nur, wenn der Helfer ihn GENANNT hat.
+         *
+         * Bis 1.2.6 stand hier "sonst 0". Schwieg der Helfer, schrieb die
+         * Sicherung "autostart 0" - eine Aussage ueber etwas, das nicht
+         * gemessen war -, und das Zurueckspielen schaltete den Autostart auf
+         * dem Zielgeraet dann AKTIV AB. Fuer die Addon-Felder darunter war
+         * derselbe Fall schon richtig geloest; jetzt gilt es fuer beide. */
+        if (isset($st['kodiautostart'])) {
+            $t .= 'autostart ' . ((int) $st['kodiautostart'] ? '1' : '0') . "\n";
+        } else {
+            $t .= "# Der Autostart war nicht feststellbar (der Helfer hat nicht\n"
+                . "# geantwortet) und fehlt deshalb. Beim Zurueckspielen bleibt er\n"
+                . "# auf dem Zielgeraet, wie er ist.\n";
+        }
 
+        $plugin_felder = array_keys(ko_addon_soll());
         foreach (ko_addon_schluessel() as $k) {
             if ($addon === null) { continue; }
             $w = isset($addon[$k]) ? (string) $addon[$k] : '';
+            /* Ein Wert in einem Feld DES ANWENDERS, den das Plugin beim
+             * Zurueckspielen abweisen wuerde, kommt als KOMMENTAR hinein.
+             * Kodis Einstellungsdialog laesst etwa udp_port = 0 zu; stand das
+             * als Datenzeile in der Datei, wies das Plugin seine EIGENE
+             * Sicherung ab - und mit ihr Adresse, Thema und Passwort, die
+             * damit nichts zu tun haben. Verloren geht nichts, der Kommentar
+             * nennt den Wert.
+             *
+             * Die vier Felder DES PLUGINS bleiben Datenzeilen: ein ungueltiges
+             * Thema dort ist ein Fehler, den die Rundreise-Pruefzeile zeigen
+             * soll, und kein Wert, den man still beiseitelegt. */
+            if ($w !== '' && !in_array($k, $plugin_felder, true) && ko_addon_wert_pruefen($k, $w) === null) {
+                $t .= '# addon_' . $k . ' steht in Kodi auf "' . str_replace(array("\r", "\n"), ' ', $w)
+                    . '" - das nimmt das Plugin nicht an; beim Zurueckspielen bleibt das Feld unberuehrt.' . "\n";
+                continue;
+            }
             $t .= 'addon_' . $k . ' ' . ($w === '' ? '-' : ko_sicherung_wert($w)) . "\n";
         }
         if ($addon === null) {
@@ -1588,7 +1970,19 @@ if (!function_exists('ko_cron_lage')) {
             $k = $ordner . '/' . $p['plugin'];
             if ($k !== $p['cron'] && file_exists($k)) { $reste[] = basename($ordner); }
         }
-        if (is_file($p['cron'])) { return array(1, $p['cron'], $reste); }
+        /* Datei allein genuegt nicht: run-parts fuehrt nur AUSFUEHRBARE Dateien
+         * aus. postinstall.sh prueft das seit jeher (-f UND -x), die
+         * Selbstpruefung kannte bis 1.2.6 nur die Datei - zwei Pruefungen,
+         * zwei Wahrheiten. Zustand 2 = Datei ohne Ausfuehrungsrecht.
+         *
+         * Unter Windows (Pruefstand) kennt is_executable() nur Endungen; dort
+         * wird das Recht nicht beurteilt, statt ein Kreuz zu erfinden. */
+        if (is_file($p['cron'])) {
+            if (DIRECTORY_SEPARATOR === '/' && !is_executable($p['cron'])) {
+                return array(2, $p['cron'], $reste);
+            }
+            return array(1, $p['cron'], $reste);
+        }
         if (is_dir($p['cron']))  { return array(0, $p['cron'], $reste); }
         return array(0, '', $reste);
     }
@@ -1726,20 +2120,37 @@ if (!function_exists('ko_vorlage')) {
     {
         $cfg = ko_config();
         $topic = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
+        /* Der Satz zum Abo haengt an der FASSUNG des Gateways - wie im Reiter.
+         * Bis 1.2.6 stand hier der V1-Satz ("Abo <thema>/# noetig")
+         * unbedingt, und ein V2-Anwender las in Loxone Config das Gegenteil
+         * dessen, was die Oberflaeche daneben sagte. Ist die Fassung nicht
+         * lesbar, stehen beide Saetze da. */
+        $gw = ko_mqtt_gateway_info();
+        $fassung = $gw === null ? 0 : (int) $gw['fassung'];
+        $abo_v1 = 'Gateway V1: Abo ' . $topic . '/# eintragen.';
+        $abo_v2 = 'Gateway V2: in den Abonnements die Datenpunkte anhaken, einzutragen ist nichts.';
+        $abo = $fassung >= 2 ? $abo_v2 : ($fassung === 1 ? $abo_v1 : $abo_v1 . ' ' . $abo_v2);
         $crlf = "\r\n";
         $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-        $o .= '<VirtualInHttp HintText="" Title="Kodi Zustand" Comment="Erzeugt vom LoxBerry-Plugin Kodi NG ('
-            . date('d.m.Y') . '). Werte kommen vom MQTT-Gateway - Abo '
-            . htmlspecialchars($topic, ENT_QUOTES | ENT_XML1, 'UTF-8')
-            . '/# nötig. Loxone Config legt beim Import neu an und '
-            . 'überschreibt nichts - zweimal eingelesen ergibt doppelte Bausteine."'
-            . ' Address="http://localhost" PollingTime="604800">' . $crlf;
+        $o .= '<VirtualInHttp HintText="" Title="Kodi Zustand" Comment="'
+            . htmlspecialchars('Erzeugt vom LoxBerry-Plugin Kodi NG (' . date('d.m.Y')
+                . '). Werte kommen vom MQTT-Gateway. ' . $abo . ' Loxone Config legt beim Import '
+                . 'neu an und überschreibt nichts - zweimal eingelesen ergibt doppelte Bausteine.',
+                ENT_QUOTES | ENT_XML1, 'UTF-8')
+            . '" Address="http://localhost" PollingTime="604800">' . $crlf;
         $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
         foreach (ko_themen() as $t) {
-            if (!$t['zahl'] || $t['quelle'] !== 'plugin') { continue; }
+            if (!ko_thema_in_vorlage($t, $cfg)) { continue; }
+            /* Der Titel ist der Name, den das Gateway vergibt: aus
+             * kodi/status/ok wird kodi_status_ok. Der Comment ist der
+             * ANZEIGENAME in Loxone Config und traegt den Vorsatz "Kodi: "
+             * (Regeln/07) - wie seit 1.2.6 die Steuerbefehle. */
+            $gwname = $topic . '_' . $t['name'];
+            $gwname = str_replace('/', '_', $gwname);
             $o .= "\t" . '<VirtualInHttpCmd Title="'
-                . htmlspecialchars($topic . '_' . $t['name'], ENT_QUOTES | ENT_XML1, 'UTF-8') . '" ';
-            $o .= 'Comment="' . htmlspecialchars(ko_t('THEMA.' . $t['schl']), ENT_QUOTES | ENT_XML1, 'UTF-8') . '" Check=" " ';
+                . htmlspecialchars($gwname, ENT_QUOTES | ENT_XML1, 'UTF-8') . '" ';
+            $o .= 'Comment="' . htmlspecialchars(ko_t('VIBESCH.' . strtoupper(str_replace('/', '_', $t['name']))),
+                ENT_QUOTES | ENT_XML1, 'UTF-8') . '" Check=" " ';
             $o .= 'Signed="false" Analog="true" SourceValLow="0" DestValLow="0" '
                 . 'SourceValHigh="1" DestValHigh="1" DefVal="0" MinVal="' . $t['min']
                 . '" MaxVal="' . $t['max'] . '" Unit="&lt;v.0&gt;" HintText=""/>' . $crlf;
@@ -1808,14 +2219,12 @@ if (!function_exists('ko_vo_befehle')) {
 if (!function_exists('ko_vorlage_vo')) {
     function ko_vorlage_vo($host = null)
     {
-        if ($host === null) {
-            $cfg = ko_config();
-            $host = ($cfg['kodi_host'] !== '' && $cfg['kodi_host'] !== '127.0.0.1')
-                ? $cfg['kodi_host']
-                : (isset($_SERVER['HTTP_HOST'])
-                    ? preg_replace('/:.*$/', '', (string) $_SERVER['HTTP_HOST'])
-                    : 'loxberry');
-        }
+        /* Dieselbe Adresse wie im Reiter - aus ko_steuer_wirt(). Bis 1.2.6
+         * baute diese Stelle sie selbst mit preg_replace('/:.*$/') aus dem
+         * Host-Kopf: aus "[fd00::1]:80" wurde "tcp://[fd00:9090", aus einem
+         * leeren Kopf "tcp://:9090", und die Seite zeigte daneben eine
+         * andere Adresse als die Datei enthielt. */
+        if ($host === null) { $host = ko_steuer_wirt(); }
         $crlf = "\r\n";
         $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
         $o .= '<VirtualOut HintText="" Title="Kodi steuern (LoxBerry-Plugin)" '

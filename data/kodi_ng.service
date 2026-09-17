@@ -14,6 +14,19 @@ Description=Kodi Media Center
 # an der Grafik- und Eingabegeraete auftauchen.
 After=systemd-user-sessions.service network-online.target sound.target systemd-udev-settle.service
 Wants=network-online.target
+# Nicht endlos neu starten: mehr als fuenf Starts in zehn Minuten, und der
+# Dienst bleibt im Zustand "failed" stehen - im Protokoll ist dann zu sehen,
+# dass etwas grundsaetzlich nicht stimmt.
+#
+# Diese beiden Zeilen gehoeren nach [Unit]. Bis 1.2.7 standen sie unter
+# [Service]; dort ueberging systemd 257 StartLimitIntervalSec mit "Unknown key
+# ... ignoring" (am Geraet gemessen, stuendlich im Journal), und es galt die
+# Vorgabe von 10 Sekunden. Zehn Minuten statt zwei, weil ein Absturzzyklus
+# hier lang ist: RestartSec=10 plus die Zeit bis zum Absturz (am Geraet
+# brauchten drei Abstuerze zusammen 1 min 51 s). Mit zwei Minuten waere die
+# Grenze nie erreicht worden.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 User=kodi
@@ -23,22 +36,54 @@ Group=kodi
 PAMName=login
 TTYPath=/dev/tty7
 Environment=HOME=/home/kodi
-ExecStart=/usr/bin/kodi-standalone
+# /usr/bin/kodi --standalone, NICHT /usr/bin/kodi-standalone.
+#
+# kodi-standalone ist eine Schleife um /usr/bin/kodi: es startet nach jedem
+# Absturz selbst neu und gibt nach drei Abstuerzen kurz nach dem Start auf -
+# und beendet sich dann mit Rueckgabewert 0 (das Skript hat kein "exit $RET";
+# es endet mit dem Wert der letzten Anweisung, einem echo). Rueckgabewerte
+# 64 bis 66 behandelt es als sauberes Ende. Am Geraet gemessen (Kodi 21.3,
+# Dienstende 10.09.2026 00:16): Kodi stuerzte mit
+# Rueckgabewert 255 ab ("unable to init windowing system"), der Dienst endete
+# mit status=0/SUCCESS, Restart=on-failure griff nie, und die Oberflaeche
+# zeigte "gestoppt" statt eines Fehlers.
+#
+# /usr/bin/kodi (dasselbe Paket, dieselbe Fassung) startet kodi.bin einmal,
+# wiederholt nur bei Rueckgabewert 65 ("Kodi neu starten") und gibt jeden
+# anderen Rueckgabewert unveraendert weiter. Ein Absturz kommt damit als
+# Fehler bei systemd an. --standalone ist das Argument, das kodi-standalone
+# selbst uebergibt. Der erste Pfad dieser Zeile muss eine vorhandene Datei
+# bleiben: ko_kodi_paket() in ko_lib.php prueft genau ihn.
+ExecStart=/usr/bin/kodi --standalone
+# Was kodi-standalone als SAUBERES Ende behandelt, bleibt ein sauberes Ende:
+# 64 (Ausschalten), 65 (Neustart der Anwendung - kommt hier nicht an, weil
+# /usr/bin/kodi ihn selbst ausfuehrt) und 66 (Neustart des Rechners).
+# 143: /usr/bin/kodi faengt SIGTERM ab, reicht es an kodi.bin weiter und
+# endet sofort mit 128+15 - bei jedem "systemctl stop". Ohne diesen Eintrag
+# endete jedes Anhalten als "failed". Gemessen am Geraet (17.09.2026, dash)
+# an einem Nachbau genau dieser trap/wait-Stelle, nicht mit Kodi selbst: die
+# Huelle endete mit 143, waehrend ihr Kind noch lief.
+SuccessExitStatus=64 65 66 143
 # Nach einem Absturz neu starten - genau das leistete das alte Skript
 # nicht. RestartSec verhindert, dass eine dauerhaft fehlschlagende
-# Installation den Rechner mit Neustarts beschaeftigt.
+# Installation den Rechner mit Neustarts beschaeftigt; die Grenze dafuer
+# steht unter [Unit].
 Restart=on-failure
 RestartSec=10
-# Nicht endlos: nach fuenf Fehlversuchen in zwei Minuten bleibt der Dienst
-# stehen, damit im Protokoll erkennbar wird, dass etwas grundsaetzlich
-# nicht stimmt.
-StartLimitBurst=5
-StartLimitIntervalSec=120
 StandardOutput=journal
 StandardError=journal
 # Beim Beenden Zeit lassen: Kodi schreibt seine Datenbank noch weg.
+#
+# KillMode=control-group (seit 1.2.7, vorher mixed): SIGTERM geht an ALLE
+# Prozesse der Unit, also auch unmittelbar an kodi.bin, und erst nach
+# TimeoutStopSec folgt SIGKILL. Mit mixed ging SIGTERM nur an /usr/bin/kodi;
+# das endet sofort (siehe 143 oben), und systemd haette dem noch schreibenden
+# kodi.bin danach gleich SIGKILL geschickt - die 30 Sekunden galten fuer ihn
+# nicht. Aus der systemd-Dokumentation geschlossen; mit laufendem Kodi am
+# Geraet NICHT gemessen (am 17.09.2026 startete Kodi dort mangels
+# Grafiktreiber nicht).
 TimeoutStopSec=30
-KillMode=mixed
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

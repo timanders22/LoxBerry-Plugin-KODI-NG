@@ -2,9 +2,18 @@
 # Kodi - Deinstallation (laeuft als ROOT)
 #
 # Bis 1.0.0 gab es dieses Skript gar nicht. Nach dem Entfernen des Plugins
-# blieben deshalb zurueck: der Systemdienst, die udev-Regeln, die
-# sudoers-Regel und der Benutzer kodi samt Heimatverzeichnis. Beim naechsten
-# Systemstart lief Kodi weiter, obwohl das Plugin weg war.
+# blieben deshalb zurueck: der Systemdienst und die udev-Regeln. Beim
+# naechsten Systemstart lief Kodi weiter, obwohl das Plugin weg war.
+#
+# DIE SUDOERS-REGEL RAEUMT LOXBERRY SELBST AB, nicht dieses Skript. Am Geraet
+# nachgelesen (sbin/plugininstall.pl, LoxBerry 4.0.0.15): purge_installation
+# ruft zuerst dieses Skript (Schritt 3, Zeilen 1567-1597) und loescht danach
+# in Schritt 6 (Zeilen 1608-1610) "rm -fv <LoxBerry>/system/sudoers/<NAME>";
+# /etc/sudoers.d ist auf dem LoxBerry ein Verweis auf dieses Verzeichnis. Zur
+# Laufzeit dieses Skripts liegt die Regel deshalb noch da - sie wird hier
+# weder entfernt noch nachgezaehlt.
+#
+# Der Benutzer kodi samt /home/kodi bleibt bewusst stehen (siehe unten).
 
 echo "<INFO> Beende den Kodi-Dienst"
 systemctl stop kodi_ng 2>/dev/null || true
@@ -24,13 +33,112 @@ echo "<INFO> Entferne die udev-Regeln"
 rm -f /etc/udev/rules.d/99-kodi_ng.rules /etc/udev/rules.d/10-kodi_ng-permissions.rules
 udevadm control --reload-rules 2>/dev/null || true
 
-# Die Sicherung der config.txt zuruecklegen, falls das Plugin sie angelegt
-# hat. Sonst bleiben gpu_mem und die Codec-Lizenzen fuer immer stehen.
+# NUR DIE ZEILEN DIESES PLUGINS AUS DER config.txt NEHMEN.
+#
+# Bis 1.2.7 wurde hier die Sicherung config.txt.kodiplugin ueber die
+# config.txt kopiert und danach geloescht. Die Sicherung ist der Stand von
+# vor der ERSTEN Installation - jede spaetere Aenderung, auch eine fremde
+# (ein dtoverlay, eine Einstellung von DietPi), war damit weg, und die
+# Sicherung, mit der man es haette bemerken koennen, ebenfalls.
+#
+# Welche Zeilen das Plugin schreibt, steht an genau zwei Stellen:
+#   postroot.sh         gpu_mem=192 - ersetzt jede Zeile "gpu_mem=...", oder
+#                       haengt "[all]" und "gpu_mem=192" an (nicht auf Pi 4/5)
+#   elevatedhelper.pl   decode_MPG2=<Wert> und decode_WVC1=<Wert> - ersetzt
+#                       jede Zeile, die so beginnt, oder haengt eine
+#                       Leerzeile, "[all]" und die Zeile an
+#
+# Daraus die Regel je Zeile der config.txt, die mit gpu_mem=, decode_MPG2=
+# oder decode_WVC1= beginnt:
+#   steht sie wortgleich in der Sicherung          bleibt sie (nicht vom Plugin)
+#   gpu_mem=, aber nicht gpu_mem=192               bleibt sie (spaeter fremd)
+#   die Sicherung hat eine Zeile desselben Schluessels -> diese zurueck
+#                                                  (das Plugin hatte sie ersetzt)
+#   sonst                                          wird sie entfernt
+# Ein "[all]" direkt vor einer entfernten Zeile, hinter dem bis zum naechsten
+# Abschnitt oder Dateiende nichts mehr steht, wird mit entfernt, ebenso die
+# dadurch ans Ende gerutschten Leerzeilen, soweit die Sicherung sie nicht
+# auch hatte. Alles andere bleibt Byte fuer Byte stehen.
+#
+# Geschrieben wird wie im Helfer: Zwischendatei im selben Verzeichnis, dann
+# umbenennen. Die Sicherung bleibt liegen, und das Skript sagt, wo.
+KO_AWK='
+BEGIN { key[1] = "gpu_mem="; key[2] = "decode_MPG2="; key[3] = "decode_WVC1="; gpu = "gpu_mem=192"; bak_leer = 0 }
+FNR == NR {
+    for (i = 1; i <= 3; i++) {
+        if (index($0, key[i]) == 1) {
+            if (!(i in erst)) erst[i] = $0
+            inbak[$0] = 1
+        }
+    }
+    bak_leer = ($0 == "") ? bak_leer + 1 : 0
+    next
+}
+{
+    n++; z[n] = $0; weg[n] = 0
+    for (i = 1; i <= 3; i++) {
+        if (index($0, key[i]) != 1) continue
+        if ($0 in inbak) break
+        if (i == 1 && $0 != gpu) break
+        if (i in erst) { z[n] = erst[i]; print "zurueckgestellt: " $0 " -> " erst[i] > "/dev/stderr" }
+        else { weg[n] = 1; print "entfernt: " $0 > "/dev/stderr" }
+        break
+    }
+}
+END {
+    for (j = 1; j < n; j++) {
+        if (weg[j] || z[j] != "[all]" || !weg[j + 1]) continue
+        k = j + 1
+        while (k <= n && (weg[k] || z[k] == "")) k++
+        if (k > n || substr(z[k], 1, 1) == "[") { weg[j] = 1; print "entfernt: [all]" > "/dev/stderr" }
+    }
+    m = n
+    while (m >= 1 && (weg[m] || z[m] == "")) m--
+    hinten_weg = 0; leer = 0
+    for (j = m + 1; j <= n; j++) { if (weg[j]) hinten_weg = 1; else leer++ }
+    if (hinten_weg) {
+        for (j = m + 1; j <= n && leer > bak_leer; j++) {
+            if (!weg[j]) { weg[j] = 1; leer-- }
+        }
+    }
+    for (j = 1; j <= n; j++) if (!weg[j]) print z[j]
+}'
 for k in /boot/firmware/config.txt /boot/config.txt; do
-    if [ -f "${k}.kodiplugin" ]; then
-        echo "<INFO> Stelle ${k} aus der Sicherung wieder her"
-        cp -f "${k}.kodiplugin" "$k" && rm -f "${k}.kodiplugin"
-        echo "<INFO> Die Aenderung wirkt erst nach einem Neustart."
+    [ -f "$k" ] || continue
+    KO_BAK="${k}.kodiplugin"
+    if [ ! -s "$KO_BAK" ]; then
+        if grep -q -e '^gpu_mem=192$' -e '^decode_MPG2=' -e '^decode_WVC1=' "$k" 2>/dev/null; then
+            echo "<WARNING> In $k stehen Zeilen, die von diesem Plugin stammen koennen:"
+            grep -e '^gpu_mem=192$' -e '^decode_MPG2=' -e '^decode_WVC1=' "$k" | sed 's/^/<WARNING>   /'
+            echo "<WARNING> Die Sicherung ${KO_BAK} fehlt oder ist leer - ohne sie ist nicht"
+            echo "<WARNING> zu unterscheiden, was vorher schon da war. Die Datei bleibt"
+            echo "<WARNING> unveraendert; bitte von Hand pruefen."
+        fi
+        continue
+    fi
+    KO_TMP="${k}.kodiplugin.tmp"
+    rm -f "$KO_TMP"
+    KO_MELD=$(awk "$KO_AWK" "$KO_BAK" "$k" 2>&1 >"$KO_TMP")
+    KO_ARC=$?
+    if [ "$KO_ARC" -ne 0 ] || [ ! -s "$KO_TMP" ]; then
+        rm -f "$KO_TMP"
+        echo "<WARNING> $k liess sich nicht auswerten (awk rc=$KO_ARC) - die Datei bleibt"
+        echo "<WARNING> unveraendert. Zeilen dieses Plugins darin: gpu_mem=192, decode_MPG2=, decode_WVC1=."
+    elif cmp -s "$KO_TMP" "$k"; then
+        rm -f "$KO_TMP"
+        echo "<INFO> In $k steht keine Zeile dieses Plugins - die Datei bleibt unveraendert."
+        echo "<INFO> Die Sicherung von vor der ersten Installation bleibt liegen: $KO_BAK"
+    else
+        chmod --reference="$k" "$KO_TMP" 2>/dev/null
+        sync "$KO_TMP" 2>/dev/null || sync
+        if mv -f "$KO_TMP" "$k"; then
+            echo "$KO_MELD" | sed "s#^#<OK> $k: #"
+            echo "<INFO> Die Aenderung wirkt erst nach einem Neustart."
+            echo "<INFO> Die Sicherung von vor der ersten Installation bleibt liegen: $KO_BAK"
+        else
+            rm -f "$KO_TMP"
+            echo "<WARNING> $k liess sich nicht ersetzen - die Datei bleibt unveraendert."
+        fi
     fi
 done
 
@@ -92,7 +200,10 @@ lb_wurzel_suchen() {
     v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ]; then
+        # Dieselbe Bedingung wie in pre-/postupgrade.sh und postinstall.sh
+        # (Regeln/06): erst mit config/system/general.json ist es ein LoxBerry.
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
             echo "$v"
             return 0
         fi
@@ -119,11 +230,35 @@ if [ -z "$UN_BASE" ]; then
     echo "<WARNING>   <LoxBerry>/system/cron/cron.*/$UN_FOLDER"
     echo "<WARNING> In der ersten steht das Kodi-Passwort im Klartext."
 fi
+# UEBERSCHREIBEN VOR DEM LOESCHEN (Regeln/06, Deinstallation). Die Zweitschrift
+# config/plugins/<ordner>.backup.json und die Upgrade-Sicherung tragen das
+# Kodi-Kennwort im Klartext. Bis 1.2.7 wurden sie nur mit rm entfernt.
+#
+# Was das leistet und was nicht: auf einer Speicherkarte entscheidet der
+# Flash-Controller, wohin geschrieben wird, und ext4 fuehrt ein Journal. Das
+# Ueberschreiben ist deshalb KEIN sicheres Loeschen - es macht nur aus "steht
+# noch lesbar im freien Bereich" ein "muss man mit Werkzeug suchen".
+# Ueberschrieben wird die volle Laenge der Datei, in ganzen 4-KB-Bloecken,
+# ohne einem Verweis zu folgen.
+ko_ueberschreiben() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 0
+    KO_GR=$(wc -c < "$1" 2>/dev/null)
+    [ -n "$KO_GR" ] && [ "$KO_GR" -gt 0 ] || return 0
+    # oflag=nofollow: zwischen der Pruefung oben und dem Schreiben koennte
+    # die Datei gegen einen Verweis getauscht werden.
+    dd if=/dev/zero of="$1" bs=4096 count=$(( (KO_GR + 4095) / 4096 )) conv=notrunc,fsync oflag=nofollow 2>/dev/null
+}
 if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ]; then
     if [ -d "$UN_BASE/data/plugins" ]; then
+        if [ -d "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" ] \
+           && [ ! -L "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" ]; then
+            find "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" -type f 2>/dev/null \
+                | while IFS= read -r KO_F; do ko_ueberschreiben "$KO_F"; done
+        fi
         rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
     fi
     if [ -d "$UN_BASE/config/plugins" ]; then
+        ko_ueberschreiben "$UN_BASE/config/plugins/$UN_FOLDER.backup.json"
         rm -f "$UN_BASE/config/plugins/$UN_FOLDER.backup.json" 2>/dev/null
     fi
     # Der eigene Cron-Eintrag. Er liegt unter system/cron/ und damit
@@ -156,6 +291,9 @@ if [ -z "$UN_BASE" ]; then
     echo "<WARNING> Ob ausserhalb der Plugin-Ordner noch etwas liegt, konnte"
     echo "<WARNING> nicht geprueft werden - siehe die Liste oben."
 elif [ "$UN_REST" -eq 0 ]; then
-    echo "<OK> Alles entfernt, was dieses Plugin ausserhalb seiner Ordner angelegt hat."
+    echo "<OK> Alles entfernt, was dieses Plugin ausserhalb seiner Ordner angelegt hat -"
+    echo "<OK> ausgenommen, was oben ausdruecklich als bleibend genannt ist (Sicherung"
+    echo "<OK> der config.txt, Benutzer kodi mit /home/kodi). Die sudoers-Regel entfernt"
+    echo "<OK> LoxBerry nach diesem Skript selbst."
 fi
 exit 0

@@ -15,13 +15,29 @@ Stand 0.1.2 vom April 2018, Apache License 2.0
 Weitere enthaltene Werke
 ------------------------
 bin/kodi-rpc
-    Steht unter der GNU General Public License Version 3. Der vollstaendige
-    Lizenztext liegt als bin/kodi-rpc.LICENSE.txt daneben und muss
-    mitgeliefert werden.
+    kodi-rpc, "Simple shell wrapper for kodis jsonrpc", von tadly
+    https://github.com/tadly/kodi-rpc
+    Mitgeliefert ist die Fassung 0.0.2 (Kopfzeile VERSION); verglichen am
+    17.09.2026 mit dem Zweig master (0.0.4): bis auf die Fassungszeile und
+    eine Pruefzeile fuer Zahlenwerte gleich. Steht unter der GNU General
+    Public License Version 3. Der vollstaendige Lizenztext liegt als
+    bin/kodi-rpc.LICENSE.txt daneben und muss mitgeliefert werden. Das
+    Plugin ruft das Werkzeug nicht auf.
 
 data/addons/service.callback.handler/
-    Kodi-Addon "LoxBerry Kodi Callback Handler", provider-name christiantf.
-    Eigene Lizenzdatei im Addon-Verzeichnis.
+    Kodi-Addon "LoxBerry Kodi Callback Handler", provider-name christiantf,
+    seit 1.2.7 Addon-Fassung 3.2.0 (geaendert, siehe changelog.txt im Addon).
+    Der Kopf von default.py nennt "Copyright (C) 2015 Tefi" und die GNU
+    General Public License Version 3 oder spaeter; Tefis Kopf stammt nach
+    seinem Wortlaut aus service.xbmc.callbacks (Team-XBMC,
+    https://github.com/pilluli/service.xbmc.callbacks). Die im
+    Addon-Verzeichnis mitgelieferte LICENSE.txt ist dagegen die GPL
+    Version 2 - byteweise gleich mit der des Originals von christianTF und
+    der von service.xbmc.callbacks. Der Widerspruch stammt also nicht aus
+    dieser Linie; welche Fassung Tefis Original (LoxWiki,
+    service.callback.handler-v1.2.zip) traegt, ist nicht belegt. Deshalb
+    nennt addon.xml keine Lizenz, und an den Lizenzangaben ist nichts
+    geaendert.
 
 
 Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
@@ -184,6 +200,31 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        advread (nur lesend) und zwei Hilfeabschnitte. Mitgegangen: postroot.sh
        ueberschrieb eine vorhandene advancedsettings.xml ohne
        Sicherungskopie - jetzt wird sie als .kodiplugin gesichert.
+
+1.2.4  bin/ko_lib.php: clearstatcache() vor der Protokollkappung; unter
+       PHP 7.4 fiel die Kappung in einem langlebigen Prozess sonst aus.
+
+1.2.5  Nur README und die Fassungsangaben; kein Code.
+
+1.2.6  bin/ko_lib.php: die 26 Steuerbefehle der VirtualOut-Vorlage tragen
+       deutsche Anzeigenamen (Abschnitt VOBEF der Sprachdateien); Titel und
+       Befehle unveraendert. Sprachdateien: Pfeil-Entitaeten als Zeichen.
+
+1.2.7  Nach einer Messung am Geraet (17.09.2026) und einer Durchsicht gegen
+       die Hausregeln. Geaendert sind bin/ko_lib.php, bin/kodi_ng_status.php,
+       bin/elevatedhelper.pl, cron/cron.01min, webfrontend/htmlauth/index.php
+       und ko_test.php, data/kodi_ng.service, postroot.sh, postinstall.sh,
+       preupgrade.sh, postupgrade.sh, uninstall/uninstall, die Sprach- und
+       Hilfedateien, README und das Callback-Addon (3.2.0). Im Einzelnen:
+       Unit startet /usr/bin/kodi unmittelbar (ein Absturz kommt bei systemd
+       an), StartLimit unter [Unit]; Lebenszeichen nie retained, neues Thema
+       status/ok, Takt am Versuch, gebremstes Protokoll; Reiter MQTT und
+       Einbindung in Loxone nach Hausstandard (Baustein-Liste); Pruefzeilen
+       fuer Grafiktreiber, eingespielte Unit und Lebenszeichen; Positivliste
+       fuer kodi_host, keine Umleitungen beim JSON-RPC-Abruf; Helfer ohne
+       Kopfzeilen vor dem JSON, geschlossen ausfallende Sperre, Pruefung auf
+       Verweise im Pfad; atomares Schreiben der config.txt; Deinstallation
+       entfernt nur die eigenen Zeilen. Die Einzelheiten stehen im README.
 
 Marken
 ------
