@@ -250,12 +250,19 @@ ko_ueberschreiben() {
 }
 if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ]; then
     if [ -d "$UN_BASE/data/plugins" ]; then
-        if [ -d "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" ] \
-           && [ ! -L "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" ]; then
-            find "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" -type f 2>/dev/null \
-                | while IFS= read -r KO_F; do ko_ueberschreiben "$KO_F"; done
-        fi
-        rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+        # Drei Namen, nicht einer: preupgrade.sh baut die neue Sicherung seit
+        # 1.2.8 unter "<ordner>.upgrade_sicherung.neu" und schiebt die alte
+        # waehrend des Umbenennens nach ".alt" (dort begruendet). Bricht ein
+        # Upgrade ab, bleiben sie liegen - mit denselben Zugangsdaten darin.
+        for KO_S in "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" \
+                    "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.neu" \
+                    "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.alt"; do
+            if [ -d "$KO_S" ] && [ ! -L "$KO_S" ]; then
+                find "$KO_S" -type f 2>/dev/null \
+                    | while IFS= read -r KO_F; do ko_ueberschreiben "$KO_F"; done
+            fi
+            rm -rf "$KO_S" 2>/dev/null
+        done
     fi
     if [ -d "$UN_BASE/config/plugins" ]; then
         ko_ueberschreiben "$UN_BASE/config/plugins/$UN_FOLDER.backup.json"
@@ -277,7 +284,9 @@ for K in "/etc/systemd/system/kodi_ng.service" \
          "/etc/udev/rules.d/99-kodi_ng.rules" \
          "/etc/udev/rules.d/10-kodi_ng-permissions.rules" \
          "$UN_BASE/config/plugins/$UN_FOLDER.backup.json" \
-         "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung"; do
+         "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" \
+         "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.neu" \
+         "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.alt"; do
     if [ -e "$K" ]; then
         echo "<WARNING> Liegt noch da und liess sich nicht entfernen: $K"
         UN_REST=$((UN_REST + 1))

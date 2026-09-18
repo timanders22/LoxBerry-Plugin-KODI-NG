@@ -1,12 +1,75 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.7 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.8 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.8 – die Sicherung wird nicht mehr gelöscht, bevor die neue steht
+
+Eine Fassung mit genau einem Thema: Sicherungen entstehen ab jetzt **neben**
+ihrem Platz, werden geprüft und bekommen ihren Namen erst danach. Die alte
+wird erst weggeworfen, wenn die neue nachweislich steht.
+
+### Was falsch war, und wie es sich gezeigt hat
+
+`preupgrade.sh` löschte die vorhandene Upgrade-Sicherung, **bevor** die neue
+geschrieben war. Dazwischen lagen ein `cp -a` über den ganzen
+Konfigurationsordner und ein `diff -r` darüber. Bricht der Lauf in diesem
+Fenster ab — abgebrochener Installer, volle Karte, Stromausfall — und stößt
+der Anwender dasselbe Update danach noch einmal an, gibt es **weder die alte
+noch eine neue** Sicherung: der zweite Lauf löscht die Sicherung des ersten
+und findet danach nichts mehr zu sichern, weil der Installer
+`config/plugins/kodi_ng/` bereits abgeräumt hat.
+
+Gemessen am 18.09.2026 in WSL/Ubuntu mit nachgestelltem `purge_installation`
+(Prüfstand `Pruefung-KODI-NG-1.2.8/Pruefstaende/messe_kodi_d.sh`, 17 Fälle):
+nach dem Abbruch lagen **11 gesicherte Dateien** da, nach dem zweiten
+Update-Versuch **0** — die ganze Konfiguration weg, einschließlich der
+Zugangsdaten zu Kodi. Mit der Bauart dieser Fassung: **0 von 11** verloren.
+
+### Was sich geändert hat
+
+* **`preupgrade.sh`** baut die Sicherung unter
+  `data/plugins/kodi_ng.upgrade_sicherung.neu`, prüft Rückgabewert **und**
+  Inhalt (`diff -r`), schiebt dann die alte nach `.alt`, benennt die neue an
+  ihren Platz um und wirft erst danach die alte weg. Misslingt das
+  Umbenennen, kommt die alte zurück. In keinem Augenblick gibt es keine
+  Sicherung. Bricht das Sichern ab, bleibt eine vorhandene Sicherung
+  unangetastet, und das Update bricht weiterhin mit Rückgabewert 2 ab — ein
+  Update ohne Sicherung wäre schlimmer als gar keins.
+* **Der Zweig „es gibt nichts zu sichern"** räumt die vorhandene Sicherung
+  nicht mehr weg. Genau dieser Zweig trägt den gemessenen Fall: nach einem
+  abgebrochenen Update ist der Konfigurationsordner weg, und die Sicherung
+  des ersten Laufs ist die einzige Abschrift. Das Protokoll sagt jetzt, dass
+  sie liegen bleibt und woher sie stammt.
+* **`postroot.sh`** hat für beide Sicherungen — `config.txt.kodiplugin` und
+  `advancedsettings.xml.kodiplugin` — eine gemeinsame Funktion bekommen:
+  in eine Nebendatei kopieren, byteweise gegen das Original vergleichen,
+  dann umbenennen. Vorher stand dort ein ungeprüftes `cp` und die Meldung
+  „gesichert" unbedingt dahinter. Brach das Kopieren ab, stand am
+  Sicherungspfad eine halbe Datei — und weil beide Stellen eine vorhandene
+  Sicherung nie wieder anfassen, wäre sie für immer stehen geblieben,
+  während die echte Datei unmittelbar danach überschrieben wurde. Scheitert
+  die Sicherung jetzt, wird nichts überschrieben: `gpu_mem` bleibt ungesetzt
+  bzw. Kodis Fernsteuerung unverändert, und das Protokoll sagt es.
+* **`bin/ko_lib.php`** legt eine beschädigte Konfiguration ebenfalls über
+  eine Nebendatei als `kodi.json.kaputt` beiseite, mit den Rechten 0600 —
+  in ihr steht dasselbe Kodi-Passwort im Klartext wie in der Konfiguration.
+  Vorher kappte ein `copy()` eine schon vorhandene `.kaputt`, bevor es
+  schrieb; brach das Schreiben ab, war der ältere Beleg weg und der neue
+  nicht da.
+* **`postupgrade.sh` und `uninstall/uninstall`** räumen die beiden neuen
+  Namen `.neu` und `.alt` mit weg. `uninstall` überschreibt sie vorher, wie
+  es die Sicherung selbst schon überschrieb — sie tragen dieselben
+  Zugangsdaten.
+
+Am Gerät ist diese Fassung **nicht** gemessen; alles in WSL/Ubuntu mit
+nachgestelltem `purge_installation`, PHP 8.3.6. Der Abbruch ist mit
+`ulimit -f 0` hergestellt, nicht mit einer wirklich vollen Karte.
 
 ## Version 1.2.7 – am Gerät gemessen, und was dabei herauskam
 

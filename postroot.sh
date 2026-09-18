@@ -40,6 +40,46 @@ if [ -z "$KO_PKG" ]; then
     KO_FEHLER=1
 fi
 
+# EINE SICHERUNG ENTSTEHT NEBENAN UND BEKOMMT IHREN NAMEN ERST, WENN SIE
+# NACHWEISLICH VOLLSTAENDIG IST.
+#
+# Bis 1.2.7 stand an beiden Stellen ein blankes "cp QUELLE QUELLE.kodiplugin"
+# ohne jede Pruefung, und die Erfolgsmeldung stand unbedingt dahinter. Bricht
+# das Kopieren mittendrin ab - volle Karte, Stromausfall; dieses Plugin loest
+# einen Neustart aus -, steht am Sicherungspfad eine halbe oder leere Datei.
+# Beide Aufrufstellen fassen eine einmal vorhandene Sicherung NIE wieder an
+# (Z. 149 und Z. 278: "ist schon eine da? dann nichts tun"), also bliebe die
+# halbe Datei fuer immer stehen - und die echte Anwenderdatei wird unmittelbar
+# danach ueberschrieben.
+#
+# Gemessen am 18.09.2026 in WSL/Ubuntu
+# (Pruefung-KODI-NG-1.2.8/Pruefstaende/messe_kodi_d.sh, Faelle M3.1/M3.2,
+# Abbruch per "ulimit -f 0" ueber einer 200-kB-Datei): mit dem blanken cp
+# steht danach eine 0-Byte-Datei am Sicherungspfad, mit dem Weg unten steht
+# dort nichts, und der naechste Lauf holt die Sicherung nach.
+#
+# Lieber gar keine Sicherung als eine, die aussieht wie eine und keine ist.
+# Die Nebendatei liegt im SELBEN Verzeichnis - nur dort ist mv ein Umbenennen
+# und kein Kopieren; derselbe Namenszusatz wie im Helfer und in der
+# config.txt-Behandlung weiter unten.
+ko_datei_sichern() {
+    KO_SQ="$1"
+    KO_SZ="$2"
+    [ -f "$KO_SQ" ] || return 1
+    KO_ST="$KO_SZ.neu"
+    rm -f "$KO_ST"
+    if cp "$KO_SQ" "$KO_ST" 2>/dev/null; then
+        chmod --reference="$KO_SQ" "$KO_ST" 2>/dev/null
+        # Die WIRKUNG pruefen, nicht den Rueckgabewert allein: byteweise
+        # gegen das Original.
+        if cmp -s "$KO_SQ" "$KO_ST" && mv -f "$KO_ST" "$KO_SZ" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    rm -f "$KO_ST"
+    return 1
+}
+
 echo "<INFO> Stopping Kodi if it is running..."
 systemctl stop kodi_ng 2>/dev/null || true
 systemctl stop kodi 2>/dev/null || true
@@ -145,11 +185,26 @@ if [ -f /boot/firmware/config.txt ]; then
     CONFIGTXT="/boot/firmware/config.txt"
 fi
 
+KO_CFGOK=0
 if [ -f "$CONFIGTXT" ]; then
+    KO_CFGOK=1
     if [ ! -f "${CONFIGTXT}.kodiplugin" ]; then
         echo "<INFO> Creating backup of your $CONFIGTXT as config.txt.kodiplugin"
-        cp "$CONFIGTXT" "${CONFIGTXT}.kodiplugin"
+        if ! ko_datei_sichern "$CONFIGTXT" "${CONFIGTXT}.kodiplugin"; then
+            # Ohne Sicherung wird die Bootkonfiguration nicht angefasst: die
+            # Deinstallation braucht sie, um die eigenen Zeilen wieder
+            # herausnehmen zu koennen (uninstall/uninstall, Z. 107 ff.).
+            echo "<FAIL> $CONFIGTXT liess sich nicht nach ${CONFIGTXT}.kodiplugin"
+            echo "<FAIL> sichern. Platz auf der Bootpartition pruefen. gpu_mem wird"
+            echo "<FAIL> deshalb NICHT gesetzt; $CONFIGTXT bleibt unveraendert."
+            KO_FEHLER=1
+            KO_CFGOK=0
+        fi
     fi
+else
+    echo "<WARNING> Keine config.txt gefunden - GPU-Einstellung uebersprungen."
+fi
+if [ "$KO_CFGOK" = "1" ]; then
     # gpu_mem nur auf aelteren Pis sinnvoll (Pi <= 3); auf Pi 4/5 verwaltet der
     # Treiber den Speicher selbst - dort nichts erzwingen.
     PIMODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "")
@@ -202,8 +257,6 @@ if [ -f "$CONFIGTXT" ]; then
             fi
             ;;
     esac
-else
-    echo "<WARNING> Keine config.txt gefunden - GPU-Einstellung uebersprungen."
 fi
 
 echo "<INFO> Creating Kodi settings directory"
@@ -273,6 +326,7 @@ elif [ -z "$KO_PKG" ] || [ ! -f "$KO_ADV" ]; then
     echo "<FAIL> wird NICHT eingerichtet, eine vorhandene Datei bleibt unberuehrt."
     KO_FEHLER=1
 else
+    KO_ADVOK=1
     if [ ! -f "$ADVUSER" ]; then
         :
     elif [ -f "$ADVSICHER" ]; then
@@ -282,18 +336,30 @@ else
     elif cmp -s "$ADVUSER" "$KO_ADV"; then
         echo "<INFO> Vorhandene advancedsettings.xml stimmt mit der"
         echo "<INFO> mitgelieferten ueberein - keine Sicherung noetig."
-    else
-        cp -v "$ADVUSER" "$ADVSICHER"
+    elif ko_datei_sichern "$ADVUSER" "$ADVSICHER"; then
         echo "<INFO> Bisherige advancedsettings.xml gesichert als"
         echo "<INFO> advancedsettings.xml.kodiplugin"
-    fi
-    if cp -v "$KO_ADV" /home/kodi/.kodi/userdata/advancedsettings.xml \
-       && cmp -s "$KO_ADV" "$ADVUSER"; then
-        echo "<OK> advancedsettings.xml eingespielt (Webserver, Zeroconf und"
-        echo "<OK> Fernsteuerung von anderen Rechnern ein - noetig fuer tcp://...:9090)."
     else
-        echo "<FAIL> advancedsettings.xml liess sich nicht nach /home/kodi/.kodi/userdata kopieren."
+        # Bis 1.2.7 stand hier ein blankes "cp -v" und die Meldung
+        # "gesichert" unbedingt dahinter - und die naechste Zeile
+        # ueberschrieb die Anwenderdatei. Scheitert die Sicherung, wird
+        # nichts ueberschrieben; die Datei des Anwenders bleibt stehen.
+        echo "<FAIL> Die bisherige advancedsettings.xml liess sich nicht nach"
+        echo "<FAIL> $ADVSICHER sichern. Sie wird deshalb NICHT"
+        echo "<FAIL> ueberschrieben; Kodis Fernsteuerung bleibt unveraendert."
+        echo "<FAIL> Platz und Rechte unter /home/kodi/.kodi/userdata pruefen."
         KO_FEHLER=1
+        KO_ADVOK=0
+    fi
+    if [ "$KO_ADVOK" = "1" ]; then
+        if cp -v "$KO_ADV" /home/kodi/.kodi/userdata/advancedsettings.xml \
+           && cmp -s "$KO_ADV" "$ADVUSER"; then
+            echo "<OK> advancedsettings.xml eingespielt (Webserver, Zeroconf und"
+            echo "<OK> Fernsteuerung von anderen Rechnern ein - noetig fuer tcp://...:9090)."
+        else
+            echo "<FAIL> advancedsettings.xml liess sich nicht nach /home/kodi/.kodi/userdata kopieren."
+            KO_FEHLER=1
+        fi
     fi
 fi
 if [ "$KO_VERWEIS" -ne 0 ]; then

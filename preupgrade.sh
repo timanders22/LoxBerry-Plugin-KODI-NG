@@ -92,11 +92,36 @@ PDIR="${ARGV3:-kodi_ng}"
 # ueberdauern soll. Der Punkt im Namen ist der ganze Unterschied:
 # "rm -rf .../<x>/" trifft den Nachbarn "<x>.upgrade_sicherung" nicht.
 SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
+NEU="$SICHER.neu"
 
+# ERST DIE NEUE SICHERUNG BAUEN, DANN DIE ALTE WEGRAEUMEN.
+#
+# Bis 1.2.7 stand an dieser Stelle "rm -rf $SICHER", und erst danach kamen
+# mkdir und cp. Zwischen dem Loeschen und dem Fuellen lagen ein "cp -a" ueber
+# den ganzen Konfigordner und ein "diff -r" darueber. Brach der Lauf in
+# diesem Fenster ab - abgebrochener Installer, volle Karte, Stromausfall -
+# und stiess der Anwender dasselbe Upgrade danach erneut an, gab es WEDER die
+# alte NOCH eine neue Sicherung: der zweite Lauf loeschte die Sicherung des
+# ersten und fand danach keine Konfiguration mehr zum Sichern, weil
+# purge_installation config/plugins/<ordner>/ schon abgeraeumt hatte.
+#
+# Gemessen am 18.09.2026 in WSL/Ubuntu
+# (Pruefung-KODI-NG-1.2.8/Pruefstaende/messe_kodi_d.sh, Faelle M1.1 und M2.3):
+# nach purge_installation lagen 11 Dateien in der Sicherung, nach dem zweiten
+# Upgrade-Versuch 0 - 11 von 11 verloren. Derselbe Ablauf mit der Bauart
+# unten: 0 von 11 verloren.
+#
+# Reihenfolge jetzt wie in GardenaSmartSystem 1.2.10 (preupgrade.sh:126 ff.,
+# dort am selben Tag mit 0 von 11 gegengemessen): in $SICHER.neu bauen ->
+# Rueckgabewert UND Inhalt pruefen -> die alte nach $SICHER.alt schieben ->
+# die neue an ihren Platz umbenennen -> die alte wegwerfen. Beide Namen
+# liegen in data/plugins, also auf demselben Dateisystem; nur dort ist mv
+# ein Umbenennen und kein Kopieren. In keinem Augenblick gibt es keine
+# Sicherung.
 echo "<INFO> Sichere die Konfiguration nach $SICHER"
-rm -rf "$SICHER" 2>/dev/null
-mkdir -p "$SICHER/config" 2>/dev/null
-chmod 0700 "$SICHER" 2>/dev/null
+rm -rf "$NEU" 2>/dev/null
+mkdir -p "$NEU/config" 2>/dev/null
+chmod 0700 "$NEU" 2>/dev/null
 
 # Existenz PRUEFEN, bevor kopiert wird: ohne diese Bedingung meldete cp
 # "No such file or directory" ins Installationsprotokoll, sobald es noch
@@ -107,18 +132,52 @@ if [ -d "$BASE/config/plugins/$PDIR" ] \
     # etwas gesichert war, loeschte der Installer danach die einzige Kopie.
     # Rueckgabewert 2 bricht die Aktualisierung vor dem Loeschen ab
     # (plugininstall.pl: >1 = Abbruch), die alte Fassung bleibt stehen.
-    if cp -a "$BASE/config/plugins/$PDIR/." "$SICHER/config/" \
-       && diff -r "$BASE/config/plugins/$PDIR" "$SICHER/config" >/dev/null 2>&1; then
-        echo "<OK> Konfiguration gesichert."
+    if cp -a "$BASE/config/plugins/$PDIR/." "$NEU/config/" \
+       && diff -r "$BASE/config/plugins/$PDIR" "$NEU/config" >/dev/null 2>&1; then
+        # Die neue Sicherung steht und ist geprueft. Jetzt erst die alte.
+        rm -rf "$SICHER.alt" 2>/dev/null
+        if [ -e "$SICHER" ] || [ -L "$SICHER" ]; then
+            mv "$SICHER" "$SICHER.alt" 2>/dev/null
+        fi
+        if mv "$NEU" "$SICHER" 2>/dev/null; then
+            rm -rf "$SICHER.alt" 2>/dev/null
+            echo "<OK> Konfiguration gesichert."
+        else
+            # Das Umbenennen ist der einzige Schritt, der die alte Sicherung
+            # anfasst. Scheitert er, kommt sie zurueck.
+            if [ -e "$SICHER.alt" ] || [ -L "$SICHER.alt" ]; then
+                mv "$SICHER.alt" "$SICHER" 2>/dev/null
+            fi
+            rm -rf "$NEU" 2>/dev/null
+            echo "<FAIL> Die neue Sicherung liess sich nicht an ihren Platz bringen."
+            echo "<FAIL> Platz und Rechte unter $BASE/data/plugins pruefen."
+            echo "<FAIL> Die Aktualisierung wird abgebrochen, damit die Konfiguration"
+            echo "<FAIL> nicht verlorengeht."
+            exit 2
+        fi
     else
+        rm -rf "$NEU" 2>/dev/null
         echo "<FAIL> Die Konfiguration liess sich NICHT nach $SICHER sichern."
+        if [ -d "$SICHER" ]; then
+            echo "<FAIL> Die bisherige Sicherung unter $SICHER bleibt unangetastet."
+        fi
         echo "<FAIL> Die Aktualisierung wird abgebrochen, damit sie nicht verlorengeht."
         exit 2
     fi
 else
     # Dieses Skript laeuft nur bei einem Update - "Erstinstallation" war
     # hier nie die richtige Erklaerung.
+    #
+    # Und die alte Sicherung bleibt hier liegen. Genau dieser Zweig traegt
+    # den gemessenen Fall: nach einem abgebrochenen Upgrade ist der
+    # Konfigordner weg, die Sicherung des ersten Laufs ist die einzige
+    # Abschrift - sie darf der zweite Versuch nicht wegraeumen.
+    rm -rf "$NEU" 2>/dev/null
     echo "<INFO> Unter $BASE/config/plugins/$PDIR liegt keine Konfiguration - es gibt nichts zu sichern."
+    if [ -d "$SICHER" ]; then
+        echo "<INFO> Die Sicherung unter $SICHER bleibt liegen; sie stammt aus einem"
+        echo "<INFO> frueheren Lauf und ist unter Umstaenden die einzige Abschrift."
+    fi
 fi
 
 exit 0

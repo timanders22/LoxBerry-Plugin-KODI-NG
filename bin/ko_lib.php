@@ -343,6 +343,43 @@ if (!function_exists('ko_json_schreiben')) {
     }
 }
 
+/** Eine vorhandene Datei unteilbar neben ihren Platz legen.
+ *
+ *  Ein blankes copy($quelle, $ziel) oeffnet $ziel mit O_TRUNC: die dort
+ *  liegende Datei ist SOFORT leer und wird erst danach gefuellt. Bricht das
+ *  Schreiben in diesem Fenster ab, gibt es weder die alte noch die neue.
+ *
+ *  Gemessen am 18.09.2026 in WSL/Ubuntu, PHP 8.3.6
+ *  (Pruefung-KODI-NG-1.2.8/Pruefstaende/messe_kodi_d.sh, Fall M4.1; der
+ *  Abbruch ist mit "ulimit -f 0" hergestellt): mit copy() war die schon
+ *  vorhandene .kaputt hinterher 0 Byte gross, ueber diesen Weg blieb sie
+ *  unveraendert stehen.
+ *
+ *  Die Nebendatei liegt im SELBEN Verzeichnis - nur dort ist rename() ein
+ *  Umbenennen und kein Kopieren; die Prozessnummer im Namen, damit zwei
+ *  gleichzeitige Schreiber einander nicht die Nebendatei zerlegen. Die Rechte
+ *  gehoeren an das ANLEGEN: in der Konfiguration steht seit 1.2.0 das
+ *  Kodi-Passwort im Klartext, und die Abschrift traegt es mit.
+ */
+if (!function_exists('ko_datei_beiseite')) {
+    function ko_datei_beiseite($quelle, $ziel, $rechte = 0600)
+    {
+        if (!is_file($quelle)) { return false; }
+        $inhalt = @file_get_contents($quelle);
+        if ($inhalt === false) { return false; }
+        $tmp = $ziel . '.tmp.' . getmypid();
+        $fh = @fopen($tmp, 'c');
+        if ($fh === false) { return false; }
+        @chmod($tmp, $rechte);
+        $ok = ftruncate($fh, 0) && fwrite($fh, $inhalt) === strlen($inhalt);
+        fflush($fh);
+        fclose($fh);
+        if (!$ok) { @unlink($tmp); return false; }
+        if (!@rename($tmp, $ziel)) { @unlink($tmp); return false; }
+        return true;
+    }
+}
+
 /**
  * Die Lage der Konfiguration - vier Zustaende, und jeder bekommt seinen Satz.
  *
@@ -386,8 +423,16 @@ if (!function_exists('ko_config')) {
             } else {
                 /* Beschaedigt. Beiseitelegen, damit der naechste Blick sie
                  * noch hat, und die Zweitschrift versuchen. Ueberschrieben
-                 * wird sie NICHT - dann waere der Beleg fort. */
-                @copy($p['config'], $p['config'] . '.kaputt');
+                 * wird sie NICHT - dann waere der Beleg fort.
+                 *
+                 * Bis 1.2.7 stand hier @copy(). Lag schon eine .kaputt aus
+                 * einem frueheren Schaden da, kappte copy() sie, bevor es
+                 * schrieb - brach das Schreiben ab, war der aeltere Beleg
+                 * weg und der neue nicht da (gemessen, siehe
+                 * ko_datei_beiseite()). Und die Abschrift entstand mit den
+                 * Rechten der umask, obwohl in ihr dasselbe Kodi-Passwort
+                 * im Klartext steht wie in der Konfiguration. */
+                ko_datei_beiseite($p['config'], $p['config'] . '.kaputt', 0600);
                 $lage = 'kaputt';
                 $cfg = ko_json_lesen($p['zweit']);
             }

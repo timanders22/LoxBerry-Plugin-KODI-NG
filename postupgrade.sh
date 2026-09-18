@@ -93,7 +93,16 @@ fi
 
 chown -R loxberry:loxberry "$BASE/config/plugins/$PDIR" 2>/dev/null
 
-rm -rf "$BASE/data/plugins/$PDIR.upgrade_sicherung" 2>/dev/null
+# Erst hier faellt die Sicherung, und nur, wenn das Zurueckstellen oben
+# geprueft gelungen ist - der Fehlerzweig steigt mit 1 aus und laesst sie
+# liegen. Die beiden Nebendateien gehen mit: preupgrade.sh baut die neue
+# Sicherung seit 1.2.8 unter <ordner>.upgrade_sicherung.neu und schiebt die
+# alte waehrend des Umbenennens nach ".alt" (dort begruendet). Nach einem
+# abgebrochenen Lauf koennen sie liegenbleiben, und sie tragen dieselben
+# Zugangsdaten wie die Sicherung selbst.
+rm -rf "$BASE/data/plugins/$PDIR.upgrade_sicherung" \
+       "$BASE/data/plugins/$PDIR.upgrade_sicherung.neu" \
+       "$BASE/data/plugins/$PDIR.upgrade_sicherung.alt" 2>/dev/null
 rm -rf "/tmp/${ARGV1}_upgrade" 2>/dev/null
 
 echo "<OK> Update abgeschlossen."
