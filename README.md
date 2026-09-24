@@ -1,12 +1,22 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.8 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.9 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.9 – nach einem Update keine Erstanleitung mehr
+
+Bis 1.2.8 stand nach jedem Update „Naechster Schritt: Plugin-Oberflaeche
+oeffnen … Dienst starten, Autostart und Statussender einschalten" im
+Installationsprotokoll, obwohl die Einstellungen gleich danach zurückgestellt
+wurden. Jetzt erscheint die Anleitung nur, wenn weder `kodi.json` noch die von
+`preupgrade.sh` gesicherte Fassung Einstellungen trägt; `postupgrade.sh` endet
+nach dem Zurückstellen mit „Update abgeschlossen, Einstellungen übernommen"
+oder sagt, dass keine gespeicherten Einstellungen vorlagen.
 
 ## Version 1.2.8 – die Sicherung wird nicht mehr gelöscht, bevor die neue steht
 

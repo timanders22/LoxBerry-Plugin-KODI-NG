@@ -105,7 +105,23 @@ rm -rf "$BASE/data/plugins/$PDIR.upgrade_sicherung" \
        "$BASE/data/plugins/$PDIR.upgrade_sicherung.alt" 2>/dev/null
 rm -rf "/tmp/${ARGV1}_upgrade" 2>/dev/null
 
-echo "<OK> Update abgeschlossen."
+# Die Schlusszeile sagt, ob Einstellungen da sind - nach dem Zurueckstellen,
+# mit derselben Pruefung wie postinstall.sh (dort begruendet): kodi.json
+# lesbar und nicht leer. Fehlen sie, hat postinstall.sh die Anleitung schon
+# ausgegeben.
+ko_cfg_inhalt() {
+    [ -f "$1" ] || return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $d = json_decode((string) @file_get_contents($argv[1]), true);
+        exit((is_array($d) && count($d) > 0) ? 0 : 1);
+    ' -- "$1" 2>/dev/null
+}
+if ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"; then
+    echo "<OK> Update abgeschlossen, Einstellungen uebernommen."
+else
+    echo "<OK> Update abgeschlossen. Es lagen keine gespeicherten Einstellungen vor."
+fi
 echo "<INFO> Kodi laeuft ab 1.1.0 als systemd-Dienst statt ueber /etc/init.d/kodi."
 echo "<INFO> Zustand pruefen mit: systemctl status kodi_ng"
 exit 0

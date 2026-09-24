@@ -98,8 +98,43 @@ else
     echo "<WARNING> Unter $CRON liegt nichts. Der Statussender wuerde nicht laufen."
 fi
 
-echo "<INFO> Naechster Schritt: Plugin-Oberflaeche oeffnen."
-echo "<INFO> Dort laesst sich der Kodi-Dienst starten, der Autostart und der"
-echo "<INFO> Statussender einschalten (beide ab Werk aus), und die Vorlagen"
-echo "<INFO> fuer Loxone Config erzeugen."
+# DIE ERSTANLEITUNG NUR, WENN KEINE EINSTELLUNGEN DA SIND.
+#
+# Dieses Skript laeuft bei der Erstinstallation UND bei jedem Upgrade
+# (plugininstall.pl uebergibt kein Kennzeichen). Bis 1.2.8 stand die
+# Anleitung unten nach jedem Upgrade im Protokoll, obwohl postupgrade.sh die
+# Einstellungen gleich danach zurueckstellt.
+#
+# Entschieden wird nach dem INHALT von kodi.json: lesbares JSON und nicht
+# leer - dieselbe Bedingung, nach der ko_config() in bin/ko_lib.php die
+# Zweitschrift fuer brauchbar haelt ("if ($z)"). Die Vorgaben enthalten keine
+# Pflichtangabe; "eingerichtet" heisst also: die Oberflaeche hat die
+# Einstellungen mindestens einmal gespeichert.
+# Beim Upgrade liegt kodi.json in diesem Augenblick noch nicht an ihrem Platz
+# - purge_installation hat den Konfigordner geraeumt, und zurueckgestellt
+# wird erst in postupgrade.sh aus der Sicherung, die preupgrade.sh angelegt
+# hat. Deshalb zaehlt auch die dort wartende Datei. Ob das Zurueckstellen
+# gelang, meldet postupgrade.sh (mit derselben Pruefung) in seiner
+# Schlusszeile; scheitert es, steigt es mit <FAIL> aus.
+# Ohne php ist nichts pruefbar; dann steht die Anleitung.
+# Gemessen am 24.09.2026: Pruefung-KODI-NG-1.2.9/postinstall_hinweis.md.
+ko_cfg_inhalt() {
+    [ -f "$1" ] || return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $d = json_decode((string) @file_get_contents($argv[1]), true);
+        exit((is_array($d) && count($d) > 0) ? 0 : 1);
+    ' -- "$1" 2>/dev/null
+}
+if ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"; then
+    echo "<OK> Einstellungen vorhanden - eine Ersteinrichtung ist nicht noetig."
+elif ko_cfg_inhalt "$BASE/data/plugins/$PDIR.upgrade_sicherung/config/kodi.json"; then
+    echo "<INFO> Aktualisierung: die gesicherten Einstellungen werden im naechsten"
+    echo "<INFO> Schritt zurueckgestellt (postupgrade.sh)."
+else
+    echo "<INFO> Naechster Schritt: Plugin-Oberflaeche oeffnen."
+    echo "<INFO> Dort laesst sich der Kodi-Dienst starten, der Autostart und der"
+    echo "<INFO> Statussender einschalten (beide ab Werk aus), und die Vorlagen"
+    echo "<INFO> fuer Loxone Config erzeugen."
+fi
 exit 0
