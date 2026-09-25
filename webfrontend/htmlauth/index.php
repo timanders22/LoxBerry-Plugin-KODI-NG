@@ -28,17 +28,23 @@ ini_set('display_errors', '0');
  * wird deshalb ueber eine Kandidatenliste, und findet keiner etwas, wird
  * GESAGT welche Datei wo gesucht wurde. Ein stiller Ausfall saehe aus wie
  * eine leere Seite. */
-$ko_kandidaten = array();
-if (getenv('LBPBINDIR')) { $ko_kandidaten[] = getenv('LBPBINDIR') . '/ko_lib.php'; }
-if (getenv('LBHOMEDIR') && getenv('LBPPLUGINDIR')) {
-    $ko_kandidaten[] = getenv('LBHOMEDIR') . '/bin/plugins/' . getenv('LBPPLUGINDIR') . '/ko_lib.php';
+/* Welche Lage gilt, entscheidet der eigene Ablageort, nicht die Reihenfolge
+ * der Versuche (Bauart ZendureSolarFlow 0.9.26): liegt diese Datei unter
+ * .../plugins/<ordner>, ist sie installiert - webfrontend/htmlauth/plugins/
+ * <ordner>/ liegt vier Ebenen unter der Wurzel, bin/plugins/<ordner>/ drei.
+ * Sonst liegt sie in einem ausgepackten Archiv, und bin/ steht neben
+ * webfrontend/. Bis 1.2.9 wurde der Installationsort auch aus einem Archiv
+ * heraus VOR dessen eigener Bibliothek probiert; aus einem Archiv nahe der
+ * Laufwerkswurzel war das /bin/plugins/htmlauth/ko_lib.php, und was dort
+ * lag, lief als Bibliothek (in WSL gemessen, Pruefung-KODI-NG-1.2.10,
+ * Fall P1). LBPBINDIR, LBHOMEDIR und LBPPLUGINDIR sagen, wo die Anlage
+ * liegt, nicht wo diese Datei liegt - sie entscheiden das nicht mehr. */
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $ko_kandidaten = array(dirname(dirname(dirname(dirname(__DIR__))))
+                   . '/bin/plugins/' . basename(__DIR__) . '/ko_lib.php');
+} else {
+    $ko_kandidaten = array(dirname(dirname(__DIR__)) . '/bin/ko_lib.php');
 }
-// Aus dem eigenen Ort: webfrontend/htmlauth/plugins/<ordner>/ liegt vier
-// Ebenen unter der Wurzel, bin/plugins/<ordner>/ drei.
-$ko_kandidaten[] = dirname(dirname(dirname(dirname(__DIR__))))
-                 . '/bin/plugins/' . basename(__DIR__) . '/ko_lib.php';
-// Entpacktes Archiv: bin/ liegt neben webfrontend/.
-$ko_kandidaten[] = dirname(dirname(__DIR__)) . '/bin/ko_lib.php';
 
 $ko_lib = '';
 foreach ($ko_kandidaten as $ko_k) {
@@ -504,6 +510,13 @@ if (ko_ist_post()) {
     /* ============ Dienst steuern ============ */
     if (isset($_POST['service']) && is_string($_POST['service'])) {
         $ko_was = (string) $_POST['service'];
+        /* Aus einem ausgepackten Archiv (ko_paths(), Archivmodus) geht kein
+         * Befehl an einen Kodi-Dienst: der Helfer wird dort nicht gerufen, und
+         * "geschickt" waere eine Falschmeldung (Fall A8). */
+        if (ko_paths()['home'] === '' && in_array($ko_was, array('start', 'stop', 'restart'), true)) {
+            $ko_err = ko_t('MELDUNG.ARCHIV_KEIN_BEFEHL');
+            $ko_was = '';
+        }
         if (in_array($ko_was, array('start', 'stop', 'restart'), true)) {
             ko_helper('action=service key=kodi value=' . $ko_was);
             ko_log('Dienst: ' . $ko_was);
@@ -524,11 +537,15 @@ if (ko_ist_post()) {
     /* ============ Test-Ereignis an MQTT ============ */
     if (isset($_POST['mqtttest'])) {
         $ko_st = ko_status();
+        /* Das Test-Ereignis sendet NIE retained (letztes Argument true): es
+         * kommt aus einem Knopfdruck, auch bei ausgeschaltetem Statussender,
+         * und niemand frischt es danach auf. Bis 1.2.9 blieben dienst und
+         * autostart davon fuer immer im Broker stehen (Fall R19). */
         list($ko_n, $ko_meldung, $ko_versucht) = ko_mqtt_publish(array(
             'dienst'      => isset($ko_st['kodistarted']) ? (int) $ko_st['kodistarted'] : null,
             'autostart'   => isset($ko_st['kodiautostart']) ? (int) $ko_st['kodiautostart'] : null,
             'zeitstempel' => time(),
-        ));
+        ), false, array(), true);
         /* Die Meldung nennt den WIRKLICHEN Grund. Bis 1.2.6 wurde er
          * verworfen, und der Text behauptete immer "UDP-Eingang nicht
          * gesetzt" - auch wenn der gesetzt war und nur der Socket scheiterte. */

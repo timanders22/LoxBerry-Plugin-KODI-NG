@@ -191,7 +191,8 @@ UN_FOLDER="${3:-kodi_ng}"
 # Das Hausmuster hat genau deshalb eine harte Obergrenze: die echte Wurzel
 # liegt vom Ablageort dieser Datei fuenf Ebenen entfernt, ein Fehltreffer
 # weiter oben wird von der Zaehlung abgeschnitten. Und ein Verzeichnis gilt
-# nur dann als Wurzel, wenn es config/plugins UND data/plugins traegt.
+# nur dann als Wurzel, wenn es config/plugins, data/plugins UND
+# config/system/general.json traegt.
 #
 # Der Systempfad steht auch in diesen Erlaeuterungen NICHT ausgeschrieben:
 # der Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu lesen, und
@@ -212,8 +213,24 @@ lb_wurzel_suchen() {
     done
     return 1
 }
-UN_BASE="${5:-$LBHOMEDIR}"
-if [ -z "$UN_BASE" ] || [ ! -d "$UN_BASE" ]; then
+# Auch das fuenfte Argument und LBHOMEDIR gelten nur, wenn dort ein LoxBerry
+# steht (config/system/general.json) - dieselbe Pruefung wie in preupgrade.sh,
+# postinstall.sh und postupgrade.sh. Bis 1.2.9 genuegte hier ein
+# Verzeichnis: mit LBHOMEDIR auf einem fremden Baum loeschte die
+# Deinstallation dort die Zweitschrift (in WSL gemessen,
+# Pruefung-KODI-NG-1.2.10, Fall W5).
+ko_ist_loxberry() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] \
+        && [ -f "$1/config/system/general.json" ]
+}
+UN_BASE=""
+for KO_KAND in "$5" "$LBHOMEDIR"; do
+    if ko_ist_loxberry "$KO_KAND"; then
+        UN_BASE="$KO_KAND"
+        break
+    fi
+done
+if [ -z "$UN_BASE" ]; then
     UN_BASE=$(lb_wurzel_suchen)
 fi
 
@@ -230,6 +247,38 @@ if [ -z "$UN_BASE" ]; then
     echo "<WARNING>   <LoxBerry>/system/cron/cron.*/$UN_FOLDER"
     echo "<WARNING> In der ersten steht das Kodi-Passwort im Klartext."
 fi
+# ZURUECKBEHALTENE MQTT-THEMEN LEEREN.
+#
+# Bis 1.2.9 blieben sie nach dem Deinstallieren im Broker stehen, und nach
+# jedem Neustart von Broker oder Gateway bekam der Miniserver sie wieder (in
+# WSL gemessen, Pruefung-KODI-NG-1.2.10, Faelle U1 bis U4). Geloescht wird
+# ueber den Sendeweg der Linie, den UDP-Eingang des Gateways; vorher und nach
+# jeder Runde wird der Broker gefragt, hoechstens drei Runden - ist er nicht
+# zu fragen, gehen alle Themen dreimal hinaus, und die Ausgabe sagt, dass
+# nicht nachgelesen wurde (kodi_ng_status.php --mqtt-leeren, ko_mqtt_leeren()
+# in ko_lib.php, README). Einen Letzten Willen gibt es nicht: die Linie hat
+# keine eigene sendende MQTT-Verbindung.
+#
+# Hier sind Konfiguration (Praefix), general.json und bin/ noch da; der
+# Installer loescht die Plugin-Ordner erst nach diesem Skript. Als loxberry,
+# nicht als root: gebraucht wird nur Lesezugriff. stdin geschlossen, damit su
+# nie auf eine Eingabe wartet. Das Callback-Addon bleibt mit /home/kodi in
+# Kodi eingespielt (siehe oben) - laeuft Kodi spaeter wieder, sendet es seine
+# Themen neu.
+KO_PHP=$(command -v php 2>/dev/null)
+KO_SND="$UN_BASE/bin/plugins/$UN_FOLDER/kodi_ng_status.php"
+if [ -n "$UN_BASE" ] && [ -n "$KO_PHP" ] && [ -f "$KO_SND" ]; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/sh loxberry -c "$(printf '%q ' env "LBHOMEDIR=$UN_BASE" "LBPPLUGINDIR=$UN_FOLDER" \
+            timeout 60 "$KO_PHP" "$KO_SND" --mqtt-leeren)" < /dev/null 2>&1 || true
+    else
+        env "LBHOMEDIR=$UN_BASE" "LBPPLUGINDIR=$UN_FOLDER" \
+            timeout 60 "$KO_PHP" "$KO_SND" --mqtt-leeren < /dev/null 2>&1 || true
+    fi
+else
+    echo "<INFO> php oder der Statussender fehlt - zurueckbehaltene MQTT-Themen wurden nicht geleert."
+fi
+
 # UEBERSCHREIBEN VOR DEM LOESCHEN (Regeln/06, Deinstallation). Die Zweitschrift
 # config/plugins/<ordner>.backup.json und die Upgrade-Sicherung tragen das
 # Kodi-Kennwort im Klartext. Bis 1.2.7 wurden sie nur mit rm entfernt.

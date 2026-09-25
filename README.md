@@ -1,12 +1,94 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.9 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.10 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.10 – was der Sender über sich selbst sagt, bleibt nicht stehen; ein Archiv bleibt bei sich
+
+### Zurückbehaltene Themen (MQTT)
+
+* `status/ok` und `erreichbar` gehen nicht mehr zurückbehalten (retained)
+  hinaus. Beide stellt der Statussender über sich selbst fest: ob sein Helfer
+  geantwortet hat und ob sein eigener JSON-RPC-Aufruf bei Kodi ankam. Blieb
+  der Sender stehen, stand bis 1.2.9 die letzte `1` für immer im Broker, und
+  nach einem Neustart von Broker oder Gateway las Loxone „in Ordnung" bzw.
+  „Kodi antwortet" von einem Sender, der nicht mehr lief. `dienst`,
+  `autostart`, `wiedergabe` und `titel` bleiben zurückbehalten: sie
+  beschreiben Kodi.
+* Ist Kodi nicht zu erreichen oder die Wiedergabe nicht festzustellen, gehen
+  `wiedergabe` und `titel` als Strich `-` hinaus, aber nicht mehr
+  zurückbehalten: der Strich ist eine Aussage des Senders über seinen
+  Abruf. Bis 1.2.9 überschrieb er im Broker den letzten Stand, den Kodi
+  wirklich gemeldet hatte; jetzt bleibt dieser stehen.
+* Das Test-Ereignis im Reiter Test sendet nie zurückbehalten. Bis 1.2.9
+  blieben `dienst` und `autostart` eines Knopfdrucks auch bei
+  ausgeschaltetem Statussender für immer im Broker.
+* Die alten zurückbehaltenen Werte (`status/ok` und `erreichbar` aus 1.2.9
+  und früher, `zeitstempel` und `herzschlag` aus 1.2.6) räumt der Sender ab,
+  bis der **Broker** bestätigt, dass keiner mehr dasteht: in jedem Lauf fragt
+  er ihn (eigenes Abonnement mit den Broker-Zugangsdaten aus der
+  LoxBerry-Konfiguration), löscht genau die noch stehenden Themen mit einer
+  leeren zurückbehaltenen Nachricht unmittelbar vor dem gültigen Wert und legt
+  den Merker „erledigt" erst, wenn der Broker nichts mehr meldet. Bis 1.2.9
+  geschah das nur für `zeitstempel` und `herzschlag`, genau einmal, und der
+  Merker hing am bloßen Übergeben an den UDP-Eingang des Gateways – der
+  verwirft unter Last Datagramme, und der Altwert blieb stehen (am Gerät
+  belegt).
+* Ist der Broker nicht zu fragen (keine Verbindung, Anmeldung abgewiesen),
+  gibt es keinen Merker: dann wird in **jedem** Lauf unmittelbar vor dem
+  gültigen Wert gelöscht, und das Protokoll sagt es einmal je Stunde. Ein
+  Thema, das in diesem Lauf keinen Wert bekommt, wird nur gelöscht, wenn der
+  Broker es als stehend gemeldet hat (etwa `erreichbar` bei ausgeschalteter
+  JSON-RPC-Abfrage). Was dennoch stehen bleibt, lässt sich von Hand löschen,
+  etwa mit `mosquitto_pub -r -n -t kodi/status/ok` (Anmeldedaten des Brokers
+  aus dem LoxBerry, Präfix wie eingestellt).
+* Die Deinstallation leert alle Themen des Plugins und des Kodi-Addons unter
+  dem eingestellten Präfix (14 Themen): sie fragt den Broker, löscht, was dort
+  steht, fragt nach und wiederholt höchstens dreimal. Ohne Antwort des Brokers
+  sendet sie alle dreimal und sagt, dass nicht nachgelesen wurde. Das Addon
+  bleibt mit `/home/kodi` in Kodi eingespielt; läuft Kodi später wieder,
+  sendet es seine Themen neu.
+
+### Ein ausgepacktes Archiv handelt nicht an der Anlage
+
+* Liegt das Plugin als ausgepacktes Archiv auf einem LoxBerry – unter dessen
+  Wurzel oder mit gesetztem `LBHOMEDIR`, wie es in `/etc/environment` steht –,
+  nimmt es nicht mehr Konfiguration, Zustand und Helfer der Installation: der
+  Statussender steigt mit einer Meldung aus, statt unter dem Präfix der Anlage
+  zu senden, und die Oberfläche ruft den Helfer nicht (Kodi starten und
+  anhalten weist sie mit einer Meldung ab). Maßgeblich ist die Anlage nur,
+  wenn die Datei dort installiert liegt oder `LBHOMEDIR` und `LBPPLUGINDIR`
+  beide gesetzt sind.
+* Die LoxBerry-Wurzel gilt in Bibliothek und Deinstallation nur mit
+  `config/system/general.json`, wie seit 1.2.8 in den Hakenskripten; ein
+  gesetztes `LBHOMEDIR` ohne `config/plugins` und `data/plugins` wird
+  übergangen.
+* Bibliothek, Sprachdateien und Addon-Quelle werden nicht mehr oberhalb des
+  eigenen Pakets gesucht (aus einem Archiv nahe der Laufwerkswurzel entstanden
+  dort Pfade ab `/`), die Sprachdateien auch nicht mehr unter dem festen Namen
+  `kodi_ng` (bei einer Zweitinstallation die eines anderen Plugins).
+
+### Konfiguration
+
+* Steht in `kodi.json` ein leeres Objekt in anderer Schreibweise als `{}` –
+  etwa `{ }` oder `[]` –, springt jetzt die Zweitschrift ein. Bis 1.2.9 galt
+  das als gelesene Konfiguration, und der nächste Seitenaufbau schrieb
+  Vorgabewerte über `kodi.json` und über die Zweitschrift.
+
+### Gemessen, und was nicht
+
+In WSL Ubuntu nachgestellt, nicht am Gerät (`Pruefung-KODI-NG-1.2.10`,
+51 Fälle: vorher 36 rot, nachher 0; jede Korrektur einzeln
+zurückgebaut macht ihren Fall wieder rot). Gateway-Eingang und Broker sind
+dabei eine Attrappe (UDP-Eingang mit Retain-Speicher wie im Gateway, kleiner
+MQTT-3.1.1-Broker); gemessen sind das Datagramm am Eingang und das
+Retain-Merkmal am Paket, das der Broker zurückgibt – nicht der Weg durch das
+echte Gateway.
 
 ## Version 1.2.9 – nach einem Update keine Erstanleitung mehr
 
@@ -924,9 +1006,9 @@ Die verbindliche Liste steht im Reiter *MQTT*; sie entsteht aus
 `ko_themen()`, und der Reiter Test hält sie gegen den Sendecode.
 
 **Vom Plugin (Statussender, Cron):** jede Minute das Lebenszeichen
-`zeitstempel` und `herzschlag` (nie retained) sowie `status/ok` (retained);
-im eingestellten Takt `dienst`, `autostart` und mit JSON-RPC `erreichbar`,
-`wiedergabe`, `titel` (retained).
+`zeitstempel`, `herzschlag` und `status/ok` (nie retained); im eingestellten
+Takt `dienst`, `autostart` und mit JSON-RPC `wiedergabe`, `titel` (retained)
+sowie `erreichbar` (seit 1.2.10 nie retained).
 
 **Vom Kodi-Addon:** `event`, `movie_title`, `music_title`, `episode_title`,
 `unknown_title`, `screensaver`

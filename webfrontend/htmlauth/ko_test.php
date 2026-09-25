@@ -708,8 +708,10 @@ function ko_addon_quelle()
     $p = ko_paths();
     $kandidaten = array(
         $p['data'] . '/addons/service.callback.handler/default.py',
+        // Entpacktes Archiv: data/ liegt neben webfrontend/. Nicht weiter
+        // hinauf - bis 1.2.9 stand hier dirname(dirname(dirname(__DIR__))),
+        // ausserhalb des Pakets (Fall P4).
         dirname(dirname(__DIR__)) . '/data/addons/service.callback.handler/default.py',
-        dirname(dirname(dirname(__DIR__))) . '/data/addons/service.callback.handler/default.py',
     );
     foreach ($kandidaten as $k) {
         if (is_file($k)) { return $k; }

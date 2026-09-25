@@ -40,17 +40,24 @@ if (!defined('KO_CFGDATEI')) { define('KO_CFGDATEI', 'kodi.json'); }
  * Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation (bin/plugins/<ordner>/ - drei Ebenen) genauso wie eine an einem
- * anderen Ort. Im entpackten Archiv findet es nichts und gibt einen Leerstring
- * zurueck, was der Aufrufer ohnehin abfangen muss.
+ * config/plugins, data/plugins UND config/system/general.json traegt. Das
+ * trifft die uebliche Installation (bin/plugins/<ordner>/ - drei Ebenen)
+ * genauso wie eine an einem anderen Ort. Findet es nichts, gibt es einen
+ * Leerstring zurueck, was der Aufrufer abfangen muss.
+ *
+ * general.json ist die entscheidende Bedingung (Regeln/06): ein LoxBerry hat
+ * sie immer, ein Rest aus Pruefstaenden nie. Bis 1.2.9 genuegten
+ * config/plugins und webfrontend. In WSL gemessen (Pruefung-KODI-NG-1.2.10,
+ * Fall W1): in einem fremden Baum ohne general.json schrieb der Statussender
+ * dort Sperrdatei, Zustand und Protokoll.
  */
 if (!function_exists('ko_wurzel_ermitteln')) {
     function ko_wurzel_ermitteln()
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -98,6 +105,28 @@ if (!function_exists('ko_plugin_ordner')) {
     }
 }
 
+/**
+ * Die Wurzel in der Reihenfolge der Hausregel: erst die Umgebung, dann die
+ * Suche - und danach nichts mehr.
+ *
+ * Ein gesetztes LBHOMEDIR gilt nur mit config/plugins UND data/plugins
+ * darunter; general.json wird hier nicht verlangt, damit Attrappen ohne sie
+ * weiter tragen (Bauart tb_lbhome(), Spotpreis-Tibber 0.9.19). Bis 1.2.9
+ * wurde LBHOMEDIR ungeprueft genommen: zeigte es auf einen leeren Ordner,
+ * galten dessen Pfade statt der Installation (Fall W4). Rueckgabe '' heisst
+ * "keine Wurzel"; jeder Aufrufer muss das abfangen.
+ */
+if (!function_exists('ko_lbhome')) {
+    function ko_lbhome()
+    {
+        $h = rtrim((string) getenv('LBHOMEDIR'), '/');
+        if ($h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+            return $h;
+        }
+        return ko_wurzel_ermitteln();
+    }
+}
+
 /** Alle Pfade an einer Stelle. */
 if (!function_exists('ko_paths')) {
     function ko_paths()
@@ -105,8 +134,34 @@ if (!function_exists('ko_paths')) {
         static $p = null;
         if ($p !== null) { return $p; }
 
-        $home = (string) getenv('LBHOMEDIR');
-        if ($home === '') { $home = ko_wurzel_ermitteln(); }
+        $home = ko_lbhome();
+        /* ARCHIVMODUS. Die Pfade DER ANLAGE gelten nur, wenn diese Bibliothek
+         * dort installiert liegt (<Wurzel>/bin/plugins/<ordner>, physisch
+         * verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich nennt
+         * ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge mit
+         * ihrer Attrappe, und so ruft die Deinstallation den Sender). Sonst
+         * ist das ein ausgepacktes Archiv oder ein Pruefordner: alles bleibt
+         * in dessen eigenem Ordner, der Statussender steigt aus, und der
+         * Helfer wird nicht gerufen.
+         *
+         * Bis 1.2.9 nahm ein Archiv unterhalb einer echten Wurzel diese Wurzel
+         * und den festen Namen kodi_ng - Konfiguration, Zustand,
+         * Formularmerkmal, UDP-Eingang und den Helfer der Anlage (sudo
+         * elevatedhelper.pl: Kodi starten und anhalten); mit $LBHOMEDIR
+         * allein, wie es am Geraet in /etc/environment steht, ebenso. In WSL
+         * gemessen (Pruefung-KODI-NG-1.2.10, Faelle A1, A2, A5 bis A8).
+         * Bauart wie tb_paths() in Spotpreis-Tibber 0.9.19. */
+        $gefunden = $home;
+        if ($home !== '') {
+            $soll = @realpath($home . '/bin/plugins/' . basename(__DIR__));
+            $ist = @realpath(__DIR__);
+            $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+            $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+            $ausdruecklich = $lbp !== ''
+                && !in_array($lbp, array('.', 'bin', 'html', 'htmlauth', 'plugins'), true)
+                && $home === rtrim((string) getenv('LBHOMEDIR'), '/');
+            if (!$installiert && !$ausdruecklich) { $home = ''; }
+        }
         $plugin = ko_plugin_ordner($home);
 
         if ($home !== '' && $plugin !== '') {
@@ -131,9 +186,12 @@ if (!function_exists('ko_paths')) {
         }
 
         // Entpacktes Archiv: alles liegt nebeneinander unter dem Paketordner.
+        // 'home' ist hier IMMER leer - daran erkennen Sender und Helfer den
+        // Archivmodus; die gefundene Wurzel steht nur fuer die Meldung da.
         $basis = dirname(__DIR__);
         $p = array(
-            'home'      => $home,
+            'home'      => '',
+            'archiv'    => $gefunden,
             'plugin'    => $plugin !== '' ? $plugin : KO_ORDNER,
             'configdir' => $basis . '/config',
             'config'    => $basis . '/config/' . KO_CFGDATEI,
@@ -415,8 +473,17 @@ if (!function_exists('ko_config')) {
         $p = ko_paths();
         $roh = trim(ko_lesen($p['config']));
 
-        if ($roh !== '' && $roh !== '{}') {
-            $d = json_decode($roh, true);
+        /* LEER WIRD AM INHALT ENTSCHIEDEN, nicht an der Zeichenfolge.
+         *
+         * Bis 1.2.9 stand hier $roh !== '{}'. "{ }" oder "[]" galten damit als
+         * gelesene Konfiguration ohne Schluessel, ko_cfg_vervollstaendigen()
+         * schrieb Vorgaben darueber - UND ueber die Zweitschrift, die den
+         * wirklichen Stand trug (in WSL gemessen, Pruefung-KODI-NG-1.2.10,
+         * Faelle K1 und K2). Jetzt gilt ein lesbares, aber leeres Feld als
+         * "leer", und die Zweitschrift springt ein - dieselbe Bedingung wie in
+         * postinstall.sh ("lesbar und nicht leer"). */
+        $d = ($roh !== '') ? json_decode($roh, true) : null;
+        if ($roh !== '' && !(is_array($d) && count($d) === 0)) {
             if (is_array($d)) {
                 $lage = 'ok';
                 $cfg = $d;
@@ -646,6 +713,13 @@ if (!function_exists('ko_helper')) {
     function ko_helper($args)
     {
         $p = ko_paths();
+        /* Ohne Wurzel oder aus einem ausgepackten Archiv (ko_paths(),
+         * Archivmodus) wird der Helfer NICHT gerufen: er laeuft als root, die
+         * sudoers-Regel gilt nur fuer den installierten Pfad, und ein Archiv
+         * hat an Kodi nichts zu schalten. Bis 1.2.9 rief ein Archiv unter der
+         * Anlage deren Helfer (in WSL gemessen, Pruefung-KODI-NG-1.2.10,
+         * Fall A6). */
+        if ($p['home'] === '') { return ''; }
         $cmd = 'sudo ' . escapeshellcmd($p['bin'] . '/elevatedhelper.pl') . ' ' . $args . ' 2>/dev/null';
         return (string) @shell_exec($cmd);
     }
@@ -1124,17 +1198,46 @@ if (!function_exists('ko_thema_retain')) {
  * Bis 1.2.6 verliess der Trockenlauf das Skript VOR dieser Funktion und
  * konnte "kein UDP-Eingang" gar nicht zeigen.
  *
+ * $abraeumen: Themen, deren zurueckbehaltener Altwert in diesem Lauf mit einer
+ * leeren retain-Nutzlast geloescht wird (Auswahl im Statussender ueber
+ * ko_mqtt_altlast()). Die Loeschzeile steht UNMITTELBAR vor dem gueltigen
+ * Wert desselben Themas: eine leere retained Nachricht geht auch an die
+ * Abonnenten und kaeme am Miniserver als leerer Wert an (Regeln/07) - der
+ * Wert dahinter stellt ihn sofort wieder her. Themen ohne Wert in diesem Lauf
+ * werden vorneweg geloescht. Bis 1.2.9 gingen die Loeschzeilen als Block vor
+ * ALLEN Werten hinaus (Fall R6).
+ *
+ * $fluechtig: Themen, die in DIESEM Aufruf ohne retain hinausgehen, auch
+ * wenn die Tabelle sie retained fuehrt - oder true fuer alle. Gebraucht fuer
+ * Platzhalter ("-" = nicht feststellbar, eine Aussage des Senders ueber sich)
+ * und fuer das Test-Ereignis im Reiter Test (Regeln/07, 19.09.2026: eine
+ * Aussage des Dienstes ueber sich ist nie retained; bei einem Abruffehler
+ * bleibt der letzte Geraetestand im Broker, Bauart BatterieBMS 0.9.28).
+ *
  * Rueckgabe: array(uebergeben, meldung, versucht, zeilen)
- *   versucht   Zahl der Werte, die nicht null waren
- *   uebergeben Zahl der Zeilen, die der Kern angenommen hat (im Trockenlauf 0)
- *   zeilen     die gebauten Zeilen - fuer den Trockenlauf und die Pruefung
+ *   versucht   Zahl der Werte, die nicht null waren (ohne Loeschzeilen)
+ *   uebergeben Zahl der Wertzeilen, die der Kern angenommen hat (im
+ *              Trockenlauf 0)
+ *   zeilen     die gebauten Zeilen samt Loeschzeilen - fuer den Trockenlauf
+ *              und die Pruefung
+ * Ob eine Loeschung ankam, sagt der Rueckgabewert NICHT - das kann nur der
+ * Broker (ko_mqtt_behalten_liste()).
  */
 if (!function_exists('ko_mqtt_publish')) {
-    function ko_mqtt_publish($paare, $trocken = false)
+    function ko_mqtt_publish($paare, $trocken = false, $abraeumen = array(), $fluechtig = array())
     {
         $cfg = ko_config();
         $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
         $zeilen = array();
+        $loesch = array();   // Stellen der Loeschzeilen in $zeilen
+        foreach ($abraeumen as $a) {
+            if (!isset($paare[$a])) {
+                // Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: die
+                // Form, die das Gateway als Loeschung liest (Regeln/07).
+                $loesch[count($zeilen)] = true;
+                $zeilen[] = 'retain ' . $prefix . '/' . $a . ' ';
+            }
+        }
         foreach ($paare as $k => $v) {
             // null wird uebersprungen, '' und '0' NICHT: eine leere Zeichenkette
             // ist ein Wert, null ist keiner.
@@ -1146,9 +1249,16 @@ if (!function_exists('ko_mqtt_publish')) {
              * trotzdem fuer sich fest: eine Absicherung, die von der anderen
              * abhaengt, ist keine. */
             $befehl = (ko_thema_retain((string) $k) && $wert !== '') ? 'retain' : 'publish';
+            if ($fluechtig === true || (is_array($fluechtig) && in_array((string) $k, $fluechtig, true))) {
+                $befehl = 'publish';
+            }
+            if (in_array((string) $k, $abraeumen, true)) {
+                $loesch[count($zeilen)] = true;
+                $zeilen[] = 'retain ' . $prefix . '/' . $k . ' ';
+            }
             $zeilen[] = $befehl . ' ' . $prefix . '/' . $k . ' ' . $wert;
         }
-        $versucht = count($zeilen);
+        $versucht = count($zeilen) - count($loesch);
 
         /* Diese Funktion PROTOKOLLIERT NICHT SELBST. Das tut der Aufrufer, und
          * zwar gebremst: bis 1.2.7 schrieb sie bei fehlendem UDP-Eingang aus
@@ -1175,8 +1285,9 @@ if (!function_exists('ko_mqtt_publish')) {
          * Megabyte hinterherhing. Der Zaehler zaehlt also UEBERGEBENE Werte;
          * ob sie ankommen, beantwortet allein der MQTT Finder. */
         $n = 0;
-        foreach ($zeilen as $msg) {
-            if (@fwrite($fp, $msg) !== false) { $n++; }
+        foreach ($zeilen as $i => $msg) {
+            // Loeschzeilen zaehlen nicht mit: $n und $versucht zaehlen Werte.
+            if (@fwrite($fp, $msg) !== false && !isset($loesch[$i])) { $n++; }
         }
         fclose($fp);
         return array($n, $n === $versucht ? '' : ($versucht - $n) . ' Zeilen nicht uebergeben',
@@ -1185,35 +1296,341 @@ if (!function_exists('ko_mqtt_publish')) {
 }
 
 /**
- * Zurueckbehaltene Altlasten im Broker loeschen.
+ * Die Themen, deren zurueckbehaltener ALTWERT abgeraeumt wird: jedes Thema
+ * des Plugins, das heute NICHT retained hinausgeht.
  *
- * Bis 1.2.6 gingen zeitstempel und herzschlag RETAINED hinaus. Ein spaeteres
- * "publish" ersetzt den zurueckbehaltenen Wert NICHT - er bliebe fuer immer
- * im Broker und zeigte nach dem Tod des Senders "lebt". Geloescht wird ein
- * zurueckbehaltenes Thema mit einer LEEREN Nutzlast und retain (Regeln/07,
- * mqttgateway.pl "Delete ... because of empty message"; am Broker gemessen
- * 14.09.2026). Deshalb geht die Zeile hier an ko_mqtt_wert_saeubern()
- * vorbei, das leer zu "-" machen wuerde.
- *
- * Rueckgabe: Zahl der uebergebenen Zeilen.
+ * Eine Umstellung von retain auf publish loescht nichts - der alte Wert steht
+ * im Broker weiter und wird nach jedem Neustart von Broker oder Gateway
+ * wieder ausgeliefert. zeitstempel und herzschlag gingen bis 1.2.6 retained
+ * hinaus, status/ok von 1.2.7 bis 1.2.9, erreichbar bis 1.2.9. Bis 1.2.9
+ * raeumte der Sender nur die beiden ersten ab (Fall R5). Geloescht wird mit
+ * einer LEEREN Nutzlast und retain (Regeln/07, mqttgateway.pl "Delete ...
+ * because of empty message"; am Broker gemessen 14.09.2026) - an
+ * ko_mqtt_wert_saeubern() vorbei, das leer zu "-" machen wuerde.
  */
-if (!function_exists('ko_mqtt_retain_loeschen')) {
-    function ko_mqtt_retain_loeschen($namen)
+if (!function_exists('ko_mqtt_altlast_liste')) {
+    function ko_mqtt_altlast_liste()
     {
-        $udp = ko_mqtt_port();
-        if (!$udp) { return 0; }
+        $l = array();
+        foreach (ko_themen() as $t) {
+            if ($t['quelle'] === 'plugin' && empty($t['retain'])) { $l[] = $t['name']; }
+        }
+        return $l;
+    }
+}
+
+/**
+ * Den Broker fragen, welche der Themen $themen er zurueckbehaelt - in EINER
+ * Verbindung, ein SUBSCRIBE mit allen Filtern.
+ *
+ * Rueckgabe array('lage' => 'ok'|'unbekannt', 'belegt' => array(thema => true)).
+ * 'ok' heisst: der Broker hat das Abonnement bestaetigt (oder einen Wert
+ * geschickt); was dann nicht unter 'belegt' steht, ist leer. 'unbekannt': er
+ * war nicht zu fragen (keine Wurzel, keine Verbindung, Anmeldung abgewiesen,
+ * keine Antwort).
+ *
+ * Warum ueberhaupt fragen: das Abraeumen laeuft ueber den UDP-Eingang des
+ * Gateways, und dort meldet fwrite() auch fuer ein verworfenes Datagramm
+ * Erfolg (Regeln/07, "Ein Absender merkt nichts davon", Nachtraege vom
+ * 19.09.2026 - der Anlass war genau diese Linie). Belegt ist das Abraeumen
+ * erst, wenn der Broker selbst sagt, dass nichts mehr dasteht.
+ *
+ * MQTT 3.1.1 von Hand, nur CONNECT, SUBSCRIBE (QoS 0) und DISCONNECT - ohne
+ * fremde Bibliothek; uebernommen aus tb_mqtt_behalten_liste() in
+ * Spotpreis-Tibber 0.9.19. Die Anmeldung nimmt Brokeruser/Brokerpass aus der
+ * general.json (Regeln/07, Abschnitt 2); das Kennwort steht nur im
+ * CONNECT-Paket, nie in einem Protokoll und nie auf einer Kommandozeile.
+ */
+if (!function_exists('ko_mqtt_behalten_liste')) {
+    function ko_mqtt_behalten_liste(array $themen)
+    {
+        $aus = array('lage' => 'unbekannt', 'belegt' => array());
+        $soll = array();
+        foreach ($themen as $t) {
+            if ((string) $t !== '') { $soll[(string) $t] = true; }
+        }
+        if (!$soll) {
+            $aus['lage'] = 'ok';
+            return $aus;
+        }
+        $p = ko_paths();
+        if ($p['home'] === '') { return $aus; }
+        $gen = ko_json_lesen($p['home'] . '/config/system/general.json');
+        $m = array();
+        if (isset($gen['Mqtt']) && is_array($gen['Mqtt'])) { $m = $gen['Mqtt']; }
+        elseif (isset($gen['mqtt']) && is_array($gen['mqtt'])) { $m = $gen['mqtt']; }
+        if (!$m) { return $aus; }
+        $hol = function ($gross, $klein) use ($m) {
+            if (isset($m[$gross]) && is_scalar($m[$gross])) { return (string) $m[$gross]; }
+            return (isset($m[$klein]) && is_scalar($m[$klein])) ? (string) $m[$klein] : '';
+        };
+        $host = trim($hol('Brokerhost', 'brokerhost'));
+        if ($host === '' || $host === 'localhost') { $host = '127.0.0.1'; }
+        $port = (int) $hol('Brokerport', 'brokerport');
+        if ($port <= 0 || $port > 65535) { $port = 1883; }
+        $benutzer = $hol('Brokeruser', 'brokeruser');
+        $kennwort = $hol('Brokerpass', 'brokerpass');
+
+        $errno = 0;
+        $errstr = '';
+        $s = @stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, 2);
+        if (!$s) { return $aus; }
+        stream_set_timeout($s, 1);
+
+        $zk = function ($t) { return pack('n', strlen($t)) . $t; };
+        $laenge = function ($n) {
+            $o = '';
+            do {
+                $b = $n % 128;
+                $n = intdiv($n, 128);
+                if ($n > 0) { $b |= 128; }
+                $o .= chr($b);
+            } while ($n > 0);
+            return $o;
+        };
+        /* Genau $n Bytes lesen oder null - bei Zeitablauf und Verbindungsende. */
+        $lies = function ($n) use ($s) {
+            $d = '';
+            while (strlen($d) < $n) {
+                $t = @fread($s, $n - strlen($d));
+                if ($t === false || $t === '') {
+                    $meta = stream_get_meta_data($s);
+                    if (!empty($meta['timed_out']) || !empty($meta['eof']) || feof($s)) { return null; }
+                    continue;
+                }
+                $d .= $t;
+            }
+            return $d;
+        };
+        /* Ein Paket: array(kopfbyte, rumpf) oder null. */
+        $paket = function () use ($lies) {
+            $k = $lies(1);
+            if ($k === null) { return null; }
+            $n = 0;
+            $mult = 1;
+            for ($i = 0; $i < 4; $i++) {
+                $b = $lies(1);
+                if ($b === null) { return null; }
+                $n += (ord($b) & 127) * $mult;
+                $mult *= 128;
+                if (!(ord($b) & 128)) { break; }
+            }
+            $r = ($n > 0) ? $lies($n) : '';
+            return ($r === null) ? null : array(ord($k), $r);
+        };
+
+        $flags = 0x02;                                  // saubere Sitzung
+        $nutz = $zk('korueck' . getmypid());
+        if ($benutzer !== '') {
+            $flags |= 0x80;
+            // Ein Kennwort ohne Benutzer laesst MQTT 3.1.1 nicht zu.
+            if ($kennwort !== '') { $flags |= 0x40; }
+        }
+        $kopf = $zk('MQTT') . chr(4) . chr($flags) . pack('n', 10);
+        if ($benutzer !== '') {
+            $nutz .= $zk($benutzer);
+            if ($kennwort !== '') { $nutz .= $zk($kennwort); }
+        }
+        if (@fwrite($s, chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz) !== false) {
+            $ack = $paket();
+            if ($ack !== null && ($ack[0] >> 4) === 2 && strlen($ack[1]) >= 2 && ord($ack[1][1]) === 0) {
+                $sub = pack('n', 1);
+                foreach (array_keys($soll) as $t) { $sub .= $zk($t) . chr(0); }
+                @fwrite($s, chr(0x82) . $laenge(strlen($sub)) . $sub);
+                $bestaetigt = false;
+                $ende = microtime(true) + 3.0;
+                while (microtime(true) < $ende) {
+                    $pk = $paket();
+                    if ($pk === null) { break; }           // Zeitablauf: nichts mehr gekommen
+                    $art = $pk[0] >> 4;
+                    if ($art === 9) {
+                        $bestaetigt = true;
+                        // Zurueckbehaltenes kommt unmittelbar nach dem SUBACK.
+                        $ende = min($ende, microtime(true) + 1.0);
+                    } elseif ($art === 3 && strlen($pk[1]) >= 2) {
+                        $tl = unpack('n', substr($pk[1], 0, 2));
+                        $t = substr($pk[1], 2, $tl[1]);
+                        $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
+                        $wert = (string) substr($pk[1], $versatz);
+                        // Am empfangenen Paket: nur mit gesetztem Retain-Merkmal.
+                        if (isset($soll[$t]) && ($pk[0] & 1) && $wert !== '') {
+                            $aus['belegt'][$t] = true;
+                            if (count($aus['belegt']) === count($soll)) { break; }
+                        }
+                    }
+                }
+                if ($bestaetigt || $aus['belegt']) { $aus['lage'] = 'ok'; }
+            }
+            @fwrite($s, chr(0xE0) . chr(0));
+        }
+        fclose($s);
+        return $aus;
+    }
+}
+
+/**
+ * Welche Altwerte muessen in diesem Lauf noch abgeraeumt werden?
+ *
+ * Rueckgabe array('lage' => 'erledigt'|'belegt'|'unbekannt',
+ *                 'themen' => array(<thema ohne praefix>, ...)).
+ *
+ * Je Lauf, bis der Merker liegt: den Broker nach allen Themen aus
+ * ko_mqtt_altlast_liste() fragen; keines belegt -> Merker schreiben, nichts
+ * abraeumen ('erledigt'); einige belegt -> genau diese ('belegt'), kein
+ * Merker; nicht zu fragen -> alle ('unbekannt'), kein Merker. Der Merker
+ * entsteht NUR aus der Antwort des Brokers, nie aus dem Senden (Fall R10).
+ * Er traegt die Kennung "leer-bestaetigt <praefix>: <Themenliste>": ein
+ * anderes Praefix oder eine andere Liste gilt nicht, und der Merker
+ * retain_altlast_geloescht von 1.2.7 bis 1.2.9 (in zustand.json) hat einen
+ * anderen Ort und gilt deshalb ebenfalls nicht (Faelle R13, R14).
+ * purge_installation raeumt ihn bei jedem Upgrade mit ab; dann wird einmal
+ * nachgefragt. Bauart tb_mqtt_altlast(), Spotpreis-Tibber 0.9.19.
+ */
+if (!function_exists('ko_mqtt_altlast')) {
+    function ko_mqtt_altlast($praefix)
+    {
+        $praefix = (string) $praefix;
+        $liste = ko_mqtt_altlast_liste();
+        $p = ko_paths();
+        $merker = $p['data'] . '/retain_altlast_bestaetigt';
+        $kennung = 'leer-bestaetigt ' . $praefix . ': ' . implode(' ', $liste);
+        if (is_file($merker) && trim(ko_lesen($merker)) === $kennung) {
+            return array('lage' => 'erledigt', 'themen' => array());
+        }
+        $voll = array();
+        foreach ($liste as $t) { $voll[] = $praefix . '/' . $t; }
+        $f = ko_mqtt_behalten_liste($voll);
+        if ($f['lage'] === 'ok' && !$f['belegt']) {
+            if (!is_dir($p['data'])) { @mkdir($p['data'], 0775, true); }
+            if (@file_put_contents($merker, $kennung . "\n") !== false) {
+                ko_log('Statussender: unter ' . $praefix . '/ steht keines der ' . count($liste)
+                    . ' frueher zurueckbehaltenen Themen mehr im Broker (' . implode(', ', $liste)
+                    . '; vom Broker bestaetigt).');
+            }
+            return array('lage' => 'erledigt', 'themen' => array());
+        }
+        if ($f['lage'] === 'ok') {
+            $l = strlen($praefix) + 1;
+            $t = array();
+            foreach (array_keys($f['belegt']) as $v) { $t[] = substr($v, $l); }
+            return array('lage' => 'belegt', 'themen' => $t);
+        }
+        return array('lage' => 'unbekannt', 'themen' => $liste);
+    }
+}
+
+/**
+ * Die Themen, die die Deinstallation leert: jedes, das eine veroeffentlichte
+ * Fassung je retained gesendet hat - die heute retained Themen der Tabelle
+ * (des Plugins UND des Addons, das seine Themen ebenfalls retained sendet)
+ * und die Altwerte aus ko_mqtt_altlast_liste(). Das ist die ganze Tabelle.
+ */
+if (!function_exists('ko_mqtt_leer_themen')) {
+    function ko_mqtt_leer_themen()
+    {
+        $l = array();
+        foreach (ko_themen() as $t) {
+            if (!empty($t['retain'])) { $l[] = $t['name']; }
+        }
+        foreach (ko_mqtt_altlast_liste() as $n) {
+            if (!in_array($n, $l, true)) { $l[] = $n; }
+        }
+        return $l;
+    }
+}
+
+/**
+ * Aus der Deinstallation: die zurueckbehaltenen Themen der Linie leeren
+ * (kodi_ng_status.php --mqtt-leeren).
+ *
+ * Der Weg ist derselbe wie beim Senden - der UDP-Eingang des Gateways,
+ * "retain <thema> " mit leerer Nutzlast. VOR der ersten Runde und nach jeder
+ * wird der Broker gefragt (ko_mqtt_behalten_liste()); hinaus geht nur, was
+ * dort noch steht, hoechstens $runden Runden. Steht nichts da, geht nichts
+ * hinaus. Ist der Broker nicht zu fragen, gehen alle Themen in jeder Runde
+ * hinaus, und die Ausgabe sagt, dass nicht nachgelesen wurde - der Eingang
+ * verwirft unter Last Datagramme (Regeln/07), ein blosses Senden ist kein
+ * Beleg. Bauart tb_mqtt_leeren(), Spotpreis-Tibber 0.9.19.
+ *
+ * Bis 1.2.9 raeumte die Deinstallation nichts ab (in WSL gemessen,
+ * Pruefung-KODI-NG-1.2.10, Faelle U1 bis U4). Schreibt weder Protokoll noch
+ * Datei; Ausgabe im Format der Hakenskripte. Rueckgabe 0 geleert oder nicht
+ * nachpruefbar, 1 es steht noch etwas bzw. der Eingang war nicht erreichbar,
+ * 2 nicht moeglich.
+ */
+if (!function_exists('ko_mqtt_leeren')) {
+    function ko_mqtt_leeren($runden = 3, $pause_us = 1000000)
+    {
         $cfg = ko_config();
         $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
-        $fehler = 0;
-        $meldung = '';
-        $fp = @stream_socket_client('udp://127.0.0.1:' . $udp, $fehler, $meldung, 2);
-        if ($fp === false) { return 0; }
-        $n = 0;
-        foreach ($namen as $name) {
-            if (@fwrite($fp, 'retain ' . $prefix . '/' . $name . ' ') !== false) { $n++; }
+        if (trim($prefix, '/') === '' || preg_match('/[#+\s]/', $prefix)) {
+            echo "<WARNING> MQTT: das Themenpraefix ist leer oder enthaelt einen Platzhalter oder "
+               . "Leerraum - zurueckbehaltene Themen wurden nicht geleert.\n";
+            return 2;
+        }
+        $udp = ko_mqtt_port();
+        if (!$udp) {
+            echo "<INFO> MQTT: in general.json steht kein UDP-Eingang des Gateways - zurueckbehaltene "
+               . "Themen unter " . $prefix . "/ wurden nicht geleert.\n";
+            return 2;
+        }
+        $alle = array();
+        foreach (ko_mqtt_leer_themen() as $t) { $alle[] = $prefix . '/' . $t; }
+        $n = count($alle);
+        $f = ko_mqtt_behalten_liste($alle);
+        $nachgelesen = ($f['lage'] === 'ok');
+        $offen = $nachgelesen ? array_keys($f['belegt']) : $alle;
+        if ($nachgelesen && !$offen) {
+            echo "<OK> MQTT: der Broker bestaetigt: keines der " . $n . " Themen unter " . $prefix
+               . "/ steht zurueckbehalten - nichts zu leeren.\n";
+            return 0;
+        }
+        $eno = 0;
+        $etxt = '';
+        $fp = @stream_socket_client('udp://127.0.0.1:' . $udp, $eno, $etxt, 2);
+        if ($fp === false) {
+            echo "<WARNING> MQTT: der UDP-Eingang 127.0.0.1:" . $udp . " war nicht erreichbar - "
+               . "zurueckbehaltene Themen unter " . $prefix . "/ wurden nicht geleert.\n";
+            return 1;
+        }
+        $zu_leeren = count($offen);
+        $datagramme = 0;
+        for ($r = 1; $r <= max(1, (int) $runden) && $offen; $r++) {
+            if ($r > 1) { usleep((int) $pause_us); }
+            foreach ($offen as $t) {
+                // Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: die
+                // Form, die das Gateway als Loeschung liest.
+                @fwrite($fp, 'retain ' . $t . ' ');
+                $datagramme++;
+            }
+            usleep(300000);     // dem Gateway Zeit bis zum Broker lassen
+            $f = ko_mqtt_behalten_liste($offen);
+            if ($f['lage'] === 'ok') {
+                $nachgelesen = true;
+                $offen = array_keys($f['belegt']);
+            } else {
+                $nachgelesen = false;
+            }
         }
         fclose($fp);
-        return $n;
+        echo "<INFO> MQTT: " . $zu_leeren . " von " . $n . " Themen unter " . $prefix . "/ mit leerer "
+           . "Nutzlast an den UDP-Eingang " . $udp . " des Gateways gesendet (" . $datagramme
+           . " Datagramme).\n";
+        if ($nachgelesen && !$offen) {
+            echo "<OK> MQTT: der Broker bestaetigt: keines der " . $n . " Themen steht mehr "
+               . "zurueckbehalten.\n";
+            return 0;
+        }
+        if ($nachgelesen) {
+            echo "<WARNING> MQTT: " . count($offen) . " Themen stehen noch zurueckbehalten im Broker ("
+               . implode(', ', array_slice($offen, 0, 5)) . (count($offen) > 5 ? ', ...' : '')
+               . "). Von Hand: mosquitto_pub -r -n -t <thema>\n";
+            return 1;
+        }
+        echo "<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang "
+           . "verwirft unter Last Datagramme; was stehen bleibt, laesst sich mit "
+           . "mosquitto_pub -r -n -t <thema> von Hand loeschen.\n";
+        return 0;
     }
 }
 
@@ -1253,17 +1670,28 @@ if (!function_exists('ko_themen')) {
                   'min' => '0', 'max' => '1',          'schl' => 'T_DIENST',      'wschl' => 'V_01'),
             array('name' => 'autostart',   'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
                   'min' => '0', 'max' => '1',          'schl' => 'T_AUTOSTART',   'wschl' => 'V_01'),
-            array('name' => 'erreichbar',  'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
+            /* erreichbar ist NIE retained (Regeln/07, entschieden 19.09.2026): den
+             * Wert setzt der Dienst aus dem Erfolg seines EIGENEN JSON-RPC-Pings
+             * - ein Ausfallmerker der Geraeteschnittstelle, keine Aussage des
+             * Geraets. Stirbt der Sender, bliebe die letzte 1 stehen. Bis 1.2.9
+             * retained (Klasse-E-Liste 19.09.2026). */
+            array('name' => 'erreichbar',  'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => false,
                   'min' => '0', 'max' => '1',          'schl' => 'T_ERREICHBAR',  'wschl' => 'V_01'),
             array('name' => 'zeitstempel', 'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
                   'min' => '0', 'max' => '2147483647', 'schl' => 'T_ZEIT',        'wschl' => 'V_ZEIT'),
             array('name' => 'herzschlag',  'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
                   'min' => '0', 'max' => '2147483647', 'schl' => 'T_HERZ',        'wschl' => 'V_HERZ'),
-            /* status/ok geht wie das Lebenszeichen bei jedem Durchgang hinaus,
-             * ist aber ein ZUSTAND (retained): eine zurueckbehaltene 0 sagt
-             * nach einem Neustart des Miniservers das Richtige. Deshalb
-             * leben=false - leben=true heisst "nie retained". */
-            array('name' => 'status/ok',   'quelle' => 'plugin', 'zahl' => true,  'retain' => true,  'leben' => false,
+            /* status/ok geht bei jedem Durchgang hinaus und ist NIE retained
+             * (Regeln/07, entschieden 18./19.09.2026): es sagt, ob der eigene
+             * Helfer geantwortet hat - eine Aussage des Dienstes ueber sich
+             * selbst. Zurueckbehalten bliebe nach dem Tod des Senders die
+             * letzte 1 stehen, und nach einem Neustart von Broker oder Gateway
+             * laese Loxone "in Ordnung" von einem Sender, der nicht mehr
+             * laeuft. 1.2.7 bis 1.2.9 sandten es retained, begruendet mit
+             * "eine zurueckbehaltene 0 sagt das Richtige" - die 1 sagt es
+             * nicht. Damit gehoert es zum Lebenszeichen (leben=true), und die
+             * Pruefzeile "Lebenszeichen" im Reiter Test haelt es mit. */
+            array('name' => 'status/ok',   'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
                   'min' => '0', 'max' => '1',          'schl' => 'T_OK',          'wschl' => 'V_OK'),
             array('name' => 'wiedergabe',  'quelle' => 'plugin', 'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_WIEDERGABE',  'wschl' => 'V_WIEDERGABE'),
@@ -2076,14 +2504,14 @@ if (!function_exists('ko_langdir')) {
         $p = ko_paths();
         $kandidaten = array();
         if ($p['lang'] !== '') { $kandidaten[] = $p['lang']; }
-        if ($p['home'] !== '') {
-            $kandidaten[] = $p['home'] . '/templates/plugins/' . KO_ORDNER . '/lang';
-        }
-        // Entpacktes Archiv: die Sprachdateien liegen neben bin/ bzw.
-        // neben webfrontend/.
+        /* Kein Rueckfall auf den festen Namen templates/plugins/kodi_ng: bei
+         * einer Zweitinstallation (kodi_ng01) ist das die Sprachdatei eines
+         * ANDEREN Plugins. Bis 1.2.9 stand er hier (Fall P3). */
+        // Entpacktes Archiv: die Sprachdateien liegen neben bin/. Weiter
+        // hinauf wird NICHT gesucht: dirname(dirname(__DIR__)) und hoeher
+        // liegen ausserhalb des Pakets, aus einem Archiv nahe der
+        // Laufwerkswurzel ab / (bis 1.2.9 hier; Fall P2).
         $kandidaten[] = dirname(__DIR__) . '/templates/lang';
-        $kandidaten[] = dirname(dirname(__DIR__)) . '/templates/lang';
-        $kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/templates/lang';
         foreach ($kandidaten as $k) {
             if (is_file($k . '/language_de.ini') || is_file($k . '/language_en.ini')) {
                 $gefunden = $k;

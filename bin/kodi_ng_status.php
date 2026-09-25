@@ -15,6 +15,8 @@
  *     php kodi_ng_status.php              regulaerer Lauf (aus dem Cron)
  *     php kodi_ng_status.php --jetzt      Takt uebergehen, sofort alles senden
  *     php kodi_ng_status.php --trocken    alles messen, NICHTS senden
+ *     php kodi_ng_status.php --mqtt-leeren  zurueckbehaltene Themen leeren
+ *                                           (ruft die Deinstallation)
  *
  * --jetzt uebergeht den TAKT und NICHT den Schalter: wer den Sender
  * ausgeschaltet hat, will keine Themen im Broker haben. --trocken misst in
@@ -24,10 +26,14 @@
  *   jeder Cron-Durchgang   das Lebenszeichen: zeitstempel, herzschlag,
  *                          status/ok - nie retained (Regeln/07, Hausstandard
  *                          seit 26.08.2026: "ts geht bei jedem Durchgang
- *                          hinaus")
+ *                          hinaus"). status/ok ging von 1.2.7 bis 1.2.9
+ *                          entgegen diesem Satz retained hinaus (Tabelle in
+ *                          ko_themen(); Klasse-E-Liste 19.09.2026).
  *   alle sender_takt s     zusaetzlich die Zustaende: dienst, autostart und
- *                          mit JSON-RPC erreichbar, wiedergabe, titel -
- *                          retained
+ *                          mit JSON-RPC wiedergabe, titel - retained; dazu
+ *                          erreichbar - NIE retained, denn es ist der Erfolg
+ *                          des eigenen JSON-RPC-Pings, eine Aussage des
+ *                          Dienstes ueber sich selbst (Regeln/07, 19.09.2026)
  * Bis 1.2.6 ging alles zusammen im Takt hinaus, und alles retained.
  *
  * WANN EIN LAUF GELUNGEN IST (seit 1.2.7)
@@ -69,6 +75,36 @@ $ko_trocken = in_array('--trocken', $ko_argv, true);
 $ko_von_hand = $ko_jetzt || $ko_trocken;
 
 $ko_p = ko_paths();
+
+/* OHNE WURZEL ODER AUS EINEM AUSGEPACKTEN ARCHIV: NICHTS TUN.
+ *
+ * ko_paths() liefert dann home = '' (Archivmodus). Bis 1.2.9 lief dieser
+ * Sender aus einem Archiv unterhalb der Anlage mit deren Konfiguration los,
+ * sendete unter ihrem Praefix an ihren UDP-Eingang und schrieb ihre
+ * Zustandsdatei; in einem fremden Baum ohne general.json schrieb er dort (in
+ * WSL gemessen, Pruefung-KODI-NG-1.2.10, Faelle A1, A2, W1). Die Zeile steht
+ * VOR allem, was liest oder schreibt. */
+if ($ko_p['home'] === '') {
+    if (!empty($ko_p['archiv'])) {
+        fwrite(STDERR, "Kodi NG: Diese Datei liegt nicht in der Installation unter " . $ko_p['archiv'] . "\n"
+            . "(ausgepacktes Archiv oder Pruefordner). Damit nichts in die Anlage kommt, wurde\n"
+            . "nichts gesendet und nichts geschrieben. Abhilfe: den Sender aus\n"
+            . $ko_p['archiv'] . "/bin/plugins/<ordner> aufrufen oder LBHOMEDIR und LBPPLUGINDIR setzen.\n");
+    } else {
+        fwrite(STDERR, "Kodi NG: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden. LBHOMEDIR ist nicht\n"
+            . "gesetzt, und oberhalb von " . __DIR__ . " traegt kein Verzeichnis config/plugins,\n"
+            . "data/plugins und config/system/general.json. Es wurde nichts gesendet und nichts geschrieben.\n");
+    }
+    exit(1);
+}
+/* --mqtt-leeren: die zurueckbehaltenen Themen leeren - fuer
+ * uninstall/uninstall. Unabhaengig vom Schalter sender_ein: auch der Knopf
+ * "Test-Ereignis" im Reiter Test sendet retained, bei ausgeschaltetem Sender.
+ * Schreibt kein Protokoll und keinen Zustand (ko_mqtt_leeren()). */
+if (in_array('--mqtt-leeren', $ko_argv, true)) {
+    exit(ko_mqtt_leeren());
+}
+
 $ko_cfg = ko_config();
 
 /* Ist der Sender ausgeschaltet, hat dieser Lauf nichts zu tun.
@@ -182,25 +218,65 @@ $ko_werte = array(
     'status/ok'   => $ko_helfer ? 1 : 0,
 );
 
-/* ALTLAST AUS 1.2.6: dort gingen zeitstempel und herzschlag retained hinaus.
- * Einmal nach dem Update werden die zurueckbehaltenen Werte geloescht - sonst
- * stuende das letzte Lebenszeichen von 1.2.6 fuer immer im Broker (ein
- * spaeteres publish ersetzt es nicht). VOR dem Senden: eine leere retained
- * Nachricht wird auch den Abonnenten zugestellt; kaeme sie nach dem frischen
- * Zeitstempel, stuende der Eingang in Loxone bis zum naechsten Lauf leer.
- * Die Marke liegt in der Zustandsdatei; der Installer raeumt
- * data/plugins/<ordner>/ bei jedem Upgrade ab - dann laeuft das Loeschen eben
- * noch einmal, fuer ein nicht zurueckbehaltenes Thema ist es wirkungslos. */
-$ko_alt = array();
-$ko_altlast_geloescht = false;
-if (!$ko_trocken && empty($ko_zustand['retain_altlast_geloescht'])) {
-    foreach (ko_themen() as $ko_th) {
-        if ($ko_th['quelle'] === 'plugin' && !empty($ko_th['leben'])) { $ko_alt[] = $ko_th['name']; }
+/* ALTWERTE ABRAEUMEN - bis der BROKER bestaetigt, dass nichts mehr dasteht.
+ *
+ * Themen, die heute nicht mehr retained hinausgehen (ko_mqtt_altlast_liste():
+ * zeitstempel und herzschlag bis 1.2.6, status/ok von 1.2.7 bis 1.2.9,
+ * erreichbar bis 1.2.9), stuenden sonst mit ihrem letzten Wert fuer immer im
+ * Broker - ein spaeteres publish ersetzt einen zurueckbehaltenen Wert nicht.
+ *
+ * Bis 1.2.9 wurde einmal geloescht und danach ein Merker gesetzt, gestuetzt
+ * auf den Erfolg von fwrite() am UDP-Eingang. Der meldet auch fuer ein
+ * verworfenes Datagramm Erfolg; am Geraet belegt (Regeln/07, Nachtrag
+ * 19.09.2026: genau diese Linie und Beschattungswaechter 0.9.19): Merker
+ * gesetzt, Altwert stand weiter im Broker. Jetzt entscheidet der Broker
+ * selbst (ko_mqtt_altlast(), eigenes MQTT-3.1.1-Abonnement mit den
+ * Zugangsdaten aus general.json, Bauart Spotpreis-Tibber 0.9.19):
+ *   erledigt   er hat bestaetigt, dass keines der Themen mehr dasteht -
+ *              nur dann liegt der Merker, und dieser Lauf raeumt nichts ab;
+ *   belegt     genau diese Themen stehen noch - sie werden abgeraeumt, kein
+ *              Merker, der naechste Lauf fragt wieder;
+ *   unbekannt  er war nicht zu fragen - dann KEIN Merker, und in JEDEM Lauf
+ *              wird jedes Thema abgeraeumt, das in diesem Lauf einen Wert
+ *              bekommt (gebremst im Protokoll).
+ * Die leere retain-Nutzlast steht dabei UNMITTELBAR vor dem gueltigen Wert
+ * desselben Themas (ko_mqtt_publish()). Ein Thema ohne Wert in diesem Lauf
+ * wird nur geloescht, wenn der Broker es als belegt gemeldet hat und der
+ * Lauf voll ist (erreichbar bei ausgeschaltetem JSON-RPC bekommt nie wieder
+ * einen Wert); im Lebenszeichenlauf nie - dort kaeme am Miniserver ein leerer
+ * Wert an, dem nichts folgt (Regeln/07). Bis 1.2.9 geschah das Loeschen im
+ * ersten Lauf ueberhaupt, als Block vor allen Werten (Faelle R6, R15). */
+$ko_abraeumen = array();
+$ko_altlage = '';
+if (!$ko_trocken) {
+    $ko_alt = ko_mqtt_altlast($ko_cfg['mqtt_topic'] !== '' ? $ko_cfg['mqtt_topic'] : 'kodi');
+    $ko_altlage = $ko_alt['lage'];
+    foreach ($ko_alt['themen'] as $ko_th) {
+        if (isset($ko_werte[$ko_th])) {
+            $ko_abraeumen[] = $ko_th;
+        } elseif ($ko_alt['lage'] === 'belegt' && $ko_faellig) {
+            $ko_abraeumen[] = $ko_th;
+        }
     }
-    $ko_altlast_geloescht = $ko_alt && ko_mqtt_retain_loeschen($ko_alt) === count($ko_alt);
 }
 
-list($ko_n, $ko_meldung, $ko_versucht, $ko_zeilen) = ko_mqtt_publish($ko_werte, $ko_trocken);
+/* PLATZHALTER GEHEN FLUECHTIG.
+ *
+ * "-" in wiedergabe heisst "nicht feststellbar" - eine Aussage des Senders
+ * ueber seinen eigenen Abruf, nicht ueber Kodi. Ist Kodi nicht erreichbar,
+ * gilt dasselbe fuer titel. Bis 1.2.9 gingen beide retained hinaus und
+ * ueberschrieben im Broker den letzten Stand, den Kodi wirklich gemeldet
+ * hatte (Regeln/07, 19.09.2026; Bauart BatterieBMS 0.9.28: bei einem
+ * Abruffehler bleibt der letzte Geraetestand stehen). Jetzt bekommt Loxone
+ * den Strich live, und im Broker bleibt der letzte Stand von Kodi
+ * (Faelle R18, R20). */
+$ko_fluechtig = array();
+if ($ko_wiedergabe === '-' || ($ko_erreichbar !== null && $ko_erreichbar !== 1)) {
+    $ko_fluechtig = array('wiedergabe', 'titel');
+}
+
+list($ko_n, $ko_meldung, $ko_versucht, $ko_zeilen)
+    = ko_mqtt_publish($ko_werte, $ko_trocken, $ko_abraeumen, $ko_fluechtig);
 
 if ($ko_trocken) {
     echo 'Trockenlauf - es wird NICHTS gesendet. '
@@ -228,10 +304,17 @@ $ko_vollstaendig = ($ko_versucht > 0 && $ko_n === $ko_versucht);
 $ko_gelungen = $ko_vollstaendig && $ko_helfer;
 
 $ko_neu = $ko_zustand;
-if ($ko_altlast_geloescht) {
-    $ko_neu['retain_altlast_geloescht'] = 1;
-    ko_log('Statussender: zurueckbehaltene Lebenszeichen frueherer Fassungen geloescht ('
-        . implode(', ', $ko_alt) . ').');
+/* Ist der Broker nicht zu fragen, wird in jedem Lauf abgeraeumt - das steht
+ * einmal je Stunde im Protokoll, nicht jede Minute. */
+if ($ko_altlage === 'unbekannt') {
+    $ko_alog = isset($ko_zustand['altlast_log_ts']) ? (int) $ko_zustand['altlast_log_ts'] : 0;
+    if (($ko_jetzt_ts - $ko_alog) >= 3600 || $ko_alog > $ko_jetzt_ts) {
+        ko_log('Statussender: der Broker liess sich nicht befragen, ob unter '
+            . ($ko_cfg['mqtt_topic'] !== '' ? $ko_cfg['mqtt_topic'] : 'kodi')
+            . '/ noch frueher zurueckbehaltene Werte stehen (' . implode(', ', ko_mqtt_altlast_liste())
+            . '). Sie werden deshalb unmittelbar vor jedem Senden geloescht, bis der Broker antwortet.');
+        $ko_neu['altlast_log_ts'] = $ko_jetzt_ts;
+    }
 }
 if ($ko_n > 0) {
     $ko_neu['herzschlag'] = $ko_zaehler + 1;
