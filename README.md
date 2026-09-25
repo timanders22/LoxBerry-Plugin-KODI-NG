@@ -1,12 +1,24 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.10 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.11 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.11 – „nicht zu fragen“ heißt nicht „leer“
+
+Die Rückfrage beim Broker, ob früher zurückbehaltene Werte (`status/ok`,
+`erreichbar`, `herzschlag`, `zeitstempel` …) noch dastehen, liest jetzt die Antwort
+auf das Abonnement (SUBACK). Lehnt der Broker das Lesen ab (Rückgabe 0x80, etwa
+durch eine Zugriffsregel) oder antwortet er nicht zu jedem Thema, gilt er als
+„nicht zu fragen“: kein Merker „vom Broker bestätigt“, der Sender räumt die
+Altwerte weiter unmittelbar vor dem gültigen Wert ab und schreibt das einmal je
+Stunde ins Protokoll, und die Deinstallation leert, statt „nichts zu leeren“ zu
+melden. Bis 1.2.10 galt eine Ablehnung als „nichts belegt“ (gemessen in WSL,
+`Pruefung-KODI-NG-1.2.11`, Fälle S3, S4, S7, S9, S11).
 
 ## Version 1.2.10 – was der Sender über sich selbst sagt, bleibt nicht stehen; ein Archiv bleibt bei sich
 
