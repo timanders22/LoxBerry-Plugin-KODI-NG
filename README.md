@@ -1,12 +1,78 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.11 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.12 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.12 – was gespeichert heißt, steht auch da
+
+Durchsicht vom 29.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT).
+Jeder Punkt ist gemessen und hat eine Gegenprobe, die an 1.2.11 rot und an
+1.2.12 grün ist (WSL, Attrappen für Broker, Kodi, sudo und systemctl; am
+Gerät nicht gemessen).
+
+### Einstellungen und Sicherung
+
+* **Volle Speicherkarte:** Konfiguration und Zweitschrift wurden auf die
+  geschriebene Länge gekürzt, und das Kennwort war weg. Jetzt ist erst
+  geschrieben, was ganz geschrieben und zurückgelesen ist; die Zweitschrift
+  entsteht erst danach.
+* **Kennwörter werden nicht mehr verändert:** Aus `" geheim "` wurde still
+  `geheim`, und ein Tabulator verschwand. Jetzt bleibt das Kennwort, wie es
+  ist, und Steuerzeichen werden beanstandet. Ein Thema mit `/` am Rand wird
+  abgewiesen, statt still gekürzt zu werden.
+* **Die eigene Sicherung lässt sich zurückspielen:** Ein gespeicherter Wert,
+  den das Zurückspielen abweisen würde, kommt als Hinweiszeile in die
+  Sicherung, nicht als Wert, und der Reiter Einstellungen nennt ihn.
+  Doppelte Schlüssel werden beanstandet.
+* **Addon-Einstellungen beim Zurückspielen:** Adresse, Thema und UDP-Eingang
+  kommen aus dem Zielgerät, nicht aus der Datei. Bisher schrieb eine
+  Sicherung von einem anderen LoxBerry dessen Adresse ins Addon.
+
+### Oberfläche
+
+* Nach jedem Absenden wird umgeleitet; F5 wiederholt nichts mehr.
+* „Addon-Einstellungen setzen“ meldet „wieder gestartet“ nur noch, wenn Kodi
+  nachgemessen läuft.
+* PHP 8.5 meldet keine Verfallswarnung mehr.
+
+### MQTT
+
+* `event` geht nicht mehr zurückbehalten hinaus (Addon 3.2.1). Ein Ereignis
+  ist kein Zustand: Bisher kam etwa `movie_started` nach jedem Neustart von
+  Broker oder Gateway erneut als frisch am Miniserver an. Den alten Wert räumt
+  der Sender ab, bis der Broker bestätigt, dass nichts mehr dasteht.
+* Wird der Statussender ausgeschaltet oder das Thema gewechselt, werden die
+  Themen des Plugins unter dem bisherigen Präfix geleert und nachgelesen.
+  Die Meldung nennt beide Präfixe. Das Thema im Addon und das Abo im Gateway
+  folgen nicht von selbst.
+* Ist die JSON-RPC-Abfrage aus, bleiben `wiedergabe` und `titel` nicht mehr
+  für immer mit dem letzten Stand stehen.
+* Scheitert die Titelabfrage, geht `titel` als Strich hinaus, ohne den
+  zurückbehaltenen Titel zu überschreiben.
+* Ein ungültiges Themenpräfix sendet nichts mehr und wird gemeldet.
+
+### Installation und Helfer
+
+* Eine Neuinstallation spielt keine Einstellungen einer früheren Installation
+  mehr ein. Sie werden als `.alt` beiseitegelegt und einmal genannt; die
+  Deinstallation räumt sie ab. Ob ein Update läuft, entscheidet eine Marke,
+  die `preupgrade.sh` anlegt.
+* Ein Update schaltet den Autostart nicht mehr ein, wenn er aus war. Lief
+  Kodi vorher, wird es wieder gestartet und nachgemessen.
+* Die Deinstallation stellt eine eigene `advancedsettings.xml` des Anwenders
+  zurück. Eine geänderte Datei bleibt stehen, dazu kommt eine Warnung. Das
+  MQTT des Addons wird abgeschaltet.
+* Eine unlesbare Konfiguration wird beim Update als solche gemeldet, nicht
+  als „keine Einstellungen“.
+* Der Helfer folgt keinem Verweis mehr, liest keine FIFO und keine Datei über
+  1 MB. Er wartet nie länger als 15 s.
+* Die Rechtedatei sagt ehrlich, was sie erlaubt; die Prüfung leisten Helfer
+  und Oberfläche.
 
 ## Version 1.2.11 – „nicht zu fragen“ heißt nicht „leer“
 

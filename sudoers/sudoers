@@ -1,1 +1,21 @@
+# Kodi NG - der Helfer elevatedhelper.pl als root, ohne Kennwort.
+#
+# LoxBerry kopiert diese Datei selbst, als root, nach
+# <LoxBerry>/system/sudoers/<NAME aus plugin.cfg>; /etc/sudoers.d ist dort ein
+# Verweis auf diesen Ordner. Beim Deinstallieren loescht der Installer sie
+# wieder.
+#
+# WAS DIESE REGEL BEGRENZT - ehrlich gesagt: an den Argumenten nichts (Befund
+# I6, 29.09.2026). Ein Eintrag ohne Argumentliste erlaubt JEDE Argumentliste
+# (sudoers(5)). Welche Aktionen, Schluessel und Werte gelten, prueft der Helfer
+# selbst mit Positivlisten (action, key, value und jedes Addon-Feld), und die
+# Oberflaeche prueft vor dem Aufruf. Das schuetzt vor Fehlbedienung, nicht vor
+# jemandem, der als loxberry eigene Befehle absetzen kann: nach
+# /etc/sudoers.d/lbdefaults darf loxberry ohnehin ohne Kennwort /bin/systemctl
+# mit beliebigen Argumenten, apt-get, dpkg und reboot ausfuehren (am Geraet
+# gemessen, Regeln/06). Der Helfer liegt im bin-Ordner des Plugins, den
+# loxberry beschreiben darf; ein root-eigenes Hilfsskript ist aus diesem Grund
+# entfallen (Entscheidung des Hausherrn, 29.09.2026).
+#
+# Geprueft vor der Auslieferung mit visudo -c -f.
 %loxberry ALL = NOPASSWD: REPLACELBPBINDIR/elevatedhelper.pl

@@ -243,9 +243,104 @@ if [ -z "$UN_BASE" ]; then
     echo "<WARNING> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln."
     echo "<WARNING> Diese Dateien bleiben deshalb LIEGEN und muessen von Hand weg:"
     echo "<WARNING>   <LoxBerry>/config/plugins/$UN_FOLDER.backup.json"
+    echo "<WARNING>   <LoxBerry>/config/plugins/$UN_FOLDER.backup.json.alt"
     echo "<WARNING>   <LoxBerry>/data/plugins/$UN_FOLDER.upgrade_sicherung"
+    echo "<WARNING>   <LoxBerry>/data/plugins/$UN_FOLDER.upgrade_laeuft"
     echo "<WARNING>   <LoxBerry>/system/cron/cron.*/$UN_FOLDER"
-    echo "<WARNING> In der ersten steht das Kodi-Passwort im Klartext."
+    echo "<WARNING> In den ersten beiden steht das Kodi-Passwort im Klartext."
+fi
+
+# ---------- Was nur das Plugin in Kodi brauchte (Befund I4, 29.09.2026) ----------
+#
+# Paket kodi und /home/kodi bleiben (siehe oben). Bis 1.2.11 blieben dort aber
+# auch zwei Dinge, die NUR das Plugin brauchte (Schein-root gemessen):
+#   advancedsettings.xml  oeffnet JSON-RPC (TCP 9090) und den EventServer
+#                         (UDP 9777) fuer das Netz und die Weboberflaeche ohne
+#                         Kennwort; eine vorher gesicherte Datei des Anwenders
+#                         blieb verdraengt;
+#   das Addon service.callback.handler sendete weiter per MQTT und legte die
+#                         eben geleerten retained Themen neu an.
+#
+# advancedsettings.xml wird behandelt wie die config.txt: was nachweislich vom
+# Plugin stammt, geht; was der Anwender geaendert hat, bleibt mit Warnung.
+#   gleicht der mitgelieferten, .kodiplugin liegt  -> die Datei des Anwenders zurueck
+#   gleicht der mitgelieferten, ohne .kodiplugin   -> entfernen
+#   weicht ab (vom Anwender geaendert)             -> bleibt, <WARNING>
+# Das Addon bleibt eingespielt - sein UDP-Weg zum Miniserver gehoert dem
+# Anwender -, sein MQTT wird ueber den Helfer abgeschaltet (mqtt_enable=false).
+# Der Helfer schreibt nur bei angehaltenem Kodi und folgt keinem Verweis.
+# Als root wird unter /home keinem Verweis gefolgt (wie postroot.sh).
+ko_verweis_im_pfad() {
+    kp="$1"
+    while [ -n "$kp" ] && [ "$kp" != "/" ] && [ "$kp" != "/home" ]; do
+        [ -L "$kp" ] && return 0
+        kp=$(dirname "$kp")
+    done
+    return 1
+}
+KO_ADVUSER=/home/kodi/.kodi/userdata/advancedsettings.xml
+KO_ADVSICHER="$KO_ADVUSER.kodiplugin"
+KO_ADVPAKET="$UN_BASE/data/plugins/$UN_FOLDER/advancedsettings.xml"
+if [ ! -e "$KO_ADVUSER" ] && [ ! -L "$KO_ADVUSER" ]; then
+    if [ -e "$KO_ADVSICHER" ]; then
+        echo "<INFO> Es gibt keine advancedsettings.xml; die Sicherung von vor der ersten"
+        echo "<INFO> Installation bleibt liegen: $KO_ADVSICHER"
+    fi
+elif ko_verweis_im_pfad "$KO_ADVUSER" || ko_verweis_im_pfad "$KO_ADVSICHER"; then
+    echo "<WARNING> Unter $KO_ADVUSER liegt ein Verweis (Symlink). Als root wird dem"
+    echo "<WARNING> nicht gefolgt - advancedsettings.xml bleibt unveraendert. Das Plugin hatte"
+    echo "<WARNING> darin esallinterfaces, webserver und zeroconf eingeschaltet."
+elif [ -z "$UN_BASE" ] || [ ! -f "$KO_ADVPAKET" ]; then
+    echo "<WARNING> Die mitgelieferte advancedsettings.xml war nicht zu finden - ob"
+    echo "<WARNING> $KO_ADVUSER vom Plugin stammt, ist nicht zu entscheiden. Sie bleibt;"
+    echo "<WARNING> das Plugin hatte darin esallinterfaces, webserver und zeroconf eingeschaltet."
+elif cmp -s "$KO_ADVUSER" "$KO_ADVPAKET"; then
+    if [ -f "$KO_ADVSICHER" ]; then
+        if mv -f "$KO_ADVSICHER" "$KO_ADVUSER" 2>/dev/null; then
+            echo "<OK> advancedsettings.xml: die Datei von vor der ersten Installation ist"
+            echo "<OK> zurueckgestellt (aus $KO_ADVSICHER)."
+        else
+            echo "<WARNING> $KO_ADVSICHER liess sich nicht zurueckstellen - die Datei des"
+            echo "<WARNING> Plugins bleibt (esallinterfaces, webserver, zeroconf eingeschaltet)."
+        fi
+    elif rm -f "$KO_ADVUSER" 2>/dev/null && [ ! -e "$KO_ADVUSER" ]; then
+        echo "<OK> advancedsettings.xml des Plugins entfernt (esallinterfaces, webserver,"
+        echo "<OK> zeroconf) - Kodi nimmt wieder seine eigenen Einstellungen."
+    else
+        echo "<WARNING> $KO_ADVUSER liess sich nicht entfernen - darin bleiben"
+        echo "<WARNING> esallinterfaces, webserver und zeroconf eingeschaltet."
+    fi
+else
+    echo "<WARNING> $KO_ADVUSER weicht von der mitgelieferten ab (vom Anwender"
+    echo "<WARNING> geaendert) und bleibt. Das Plugin hatte darin esallinterfaces, webserver"
+    echo "<WARNING> und zeroconf eingeschaltet (JSON-RPC TCP 9090 und EventServer UDP 9777"
+    echo "<WARNING> fuer das Netz, Weboberflaeche ohne Kennwort) - bitte von Hand pruefen."
+    if [ -e "$KO_ADVSICHER" ]; then
+        echo "<WARNING> Die Datei von vor der ersten Installation liegt unter $KO_ADVSICHER."
+    fi
+fi
+KO_ADDON=/home/kodi/.kodi/addons/service.callback.handler
+KO_HELFER="$UN_BASE/bin/plugins/$UN_FOLDER/elevatedhelper.pl"
+if [ ! -d "$KO_ADDON" ]; then
+    :
+elif [ -z "$UN_BASE" ] || [ ! -f "$KO_HELFER" ] || ! command -v perl >/dev/null 2>&1; then
+    echo "<WARNING> Das Kodi-Addon service.callback.handler bleibt eingespielt und sendet"
+    echo "<WARNING> weiter per MQTT, sobald Kodi laeuft - der Helfer zum Abschalten war nicht"
+    echo "<WARNING> zu finden. In Kodi: Einstellungen des Addons, MQTT ausschalten."
+else
+    KO_HANTW=$(timeout 30 perl "$KO_HELFER" action=addonwrite a_mqtt_enable=false < /dev/null 2>/dev/null)
+    case "$KO_HANTW" in
+        *'"status":"OK"'*)
+            echo "<OK> Kodi-Addon service.callback.handler: MQTT abgeschaltet (mqtt_enable=false)."
+            echo "<OK> Das Addon bleibt eingespielt; sein UDP-Weg zum Miniserver bleibt, wie er ist."
+            ;;
+        *)
+            echo "<WARNING> MQTT im Kodi-Addon liess sich nicht abschalten (Helfer:"
+            echo "<WARNING> $(printf '%s' "$KO_HANTW" | tr -d '\r\n' | cut -c1-160))."
+            echo "<WARNING> Laeuft Kodi spaeter wieder, legt das Addon seine retained Themen neu an."
+            echo "<WARNING> In Kodi: Einstellungen des Addons, MQTT ausschalten."
+            ;;
+    esac
 fi
 # ZURUECKBEHALTENE MQTT-THEMEN LEEREN.
 #
@@ -263,8 +358,8 @@ fi
 # Installer loescht die Plugin-Ordner erst nach diesem Skript. Als loxberry,
 # nicht als root: gebraucht wird nur Lesezugriff. stdin geschlossen, damit su
 # nie auf eine Eingabe wartet. Das Callback-Addon bleibt mit /home/kodi in
-# Kodi eingespielt (siehe oben) - laeuft Kodi spaeter wieder, sendet es seine
-# Themen neu.
+# Kodi eingespielt (siehe oben); sein MQTT ist seit dem Befund I4 oben
+# abgeschaltet - gelang das nicht, steht es dort als <WARNING>.
 KO_PHP=$(command -v php 2>/dev/null)
 KO_SND="$UN_BASE/bin/plugins/$UN_FOLDER/kodi_ng_status.php"
 if [ -n "$UN_BASE" ] && [ -n "$KO_PHP" ] && [ -f "$KO_SND" ]; then
@@ -316,7 +411,16 @@ if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ]; then
     if [ -d "$UN_BASE/config/plugins" ]; then
         ko_ueberschreiben "$UN_BASE/config/plugins/$UN_FOLDER.backup.json"
         rm -f "$UN_BASE/config/plugins/$UN_FOLDER.backup.json" 2>/dev/null
+        # Dazu die .alt, die postinstall.sh bei einer Neuinstallation
+        # beiseitelegt (Entscheidung 1, Befund I1) - auch sie traegt das
+        # Kodi-Kennwort im Klartext.
+        ko_ueberschreiben "$UN_BASE/config/plugins/$UN_FOLDER.backup.json.alt"
+        rm -f "$UN_BASE/config/plugins/$UN_FOLDER.backup.json.alt" 2>/dev/null
     fi
+    # Die Upgrade-Marke aus preupgrade.sh (Befund I1). Bliebe sie liegen, hielte
+    # postinstall.sh eine spaetere Neuinstallation fuer ein Update und liesse
+    # Liegengebliebenes zum Einspielen liegen.
+    rm -f "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" 2>/dev/null
     # Der eigene Cron-Eintrag. Er liegt unter system/cron/ und damit
     # ausserhalb aller Plugin-Baeume; bliebe er stehen, riefe der Cron eine
     # Datei auf, die es nicht mehr gibt - und schriebe das jede Minute in den
@@ -333,6 +437,8 @@ for K in "/etc/systemd/system/kodi_ng.service" \
          "/etc/udev/rules.d/99-kodi_ng.rules" \
          "/etc/udev/rules.d/10-kodi_ng-permissions.rules" \
          "$UN_BASE/config/plugins/$UN_FOLDER.backup.json" \
+         "$UN_BASE/config/plugins/$UN_FOLDER.backup.json.alt" \
+         "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" \
          "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" \
          "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.neu" \
          "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.alt"; do

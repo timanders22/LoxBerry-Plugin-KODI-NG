@@ -49,3 +49,9 @@ v3.2.0
 - Startlautstaerke "nan" oder "inf" aus einer von Hand bearbeiteten
   settings.xml beendete das Addon beim Start; jetzt wie jeder andere
   unzulaessige Wert beanstandet.
+
+v3.2.1
+- event geht nicht mehr retained hinaus. Ein Ereignis ist kein Zustand; retained
+  kam etwa movie_started nach jedem Neustart von Broker oder Gateway erneut
+  als frisch am Miniserver an. Den Altwert im Broker raeumt das Plugin ab
+  (KODI-NG 1.2.12).

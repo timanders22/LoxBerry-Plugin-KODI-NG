@@ -73,6 +73,13 @@ if [ ! -d "$SICHER/config" ] && [ -d "/tmp/${ARGV1}_upgrade/config" ]; then
     echo "<INFO> Sicherung am alten Ort gefunden ($SICHER)."
 fi
 
+# WELCHE SICHERUNG HIER LIEGT (Entscheidung 1, Befund I1, 29.09.2026): nur eine
+# aus DIESEM Vorgang. preupgrade.sh hat sie eben angelegt, oder es hat eine
+# Sicherung aus einem frueheren Vorgang weggeraeumt und nur die eines
+# abgebrochenen Versuchs dieses Updates stehen lassen (dessen Marke lag noch).
+# Bei einer Neuinstallation laeuft dieses Skript nicht; dort legt
+# postinstall.sh eine liegengebliebene Sicherung nach .alt. Die Marke selbst
+# ist hier schon fort - postinstall.sh entfernt sie per trap.
 if [ -d "$SICHER/config" ] && [ -n "$(ls -A "$SICHER/config" 2>/dev/null)" ]; then
     # Erst pruefen, dann die Sicherung loeschen. Bis 1.2.7 hiess es
     # "zurueckgestellt", auch wenn cp scheiterte - und danach war die
@@ -109,16 +116,29 @@ rm -rf "/tmp/${ARGV1}_upgrade" 2>/dev/null
 # mit derselben Pruefung wie postinstall.sh (dort begruendet): kodi.json
 # lesbar und nicht leer. Fehlen sie, hat postinstall.sh die Anleitung schon
 # ausgegeben.
+# Drei Ausgaenge wie dort (Befund I5): eine vorhandene, aber unlesbare
+# kodi.json ist nicht "keine Einstellungen".
 ko_cfg_inhalt() {
     [ -f "$1" ] || return 1
     command -v php >/dev/null 2>&1 || return 2
     php -r '
-        $d = json_decode((string) @file_get_contents($argv[1]), true);
-        exit((is_array($d) && count($d) > 0) ? 0 : 1);
+        $r = @file_get_contents($argv[1]);
+        if ($r === false) { exit(3); }
+        if (trim($r) === "") { exit(4); }
+        $d = json_decode($r, true);
+        if (!is_array($d)) { exit(3); }
+        exit(count($d) > 0 ? 0 : 4);
     ' -- "$1" 2>/dev/null
 }
-if ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"; then
+ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"
+KO_RC=$?
+if [ "$KO_RC" = 0 ]; then
     echo "<OK> Update abgeschlossen, Einstellungen uebernommen."
+elif [ "$KO_RC" != 1 ] && [ "$KO_RC" != 2 ] && [ "$KO_RC" != 4 ]; then
+    echo "<WARNING> Update abgeschlossen, aber $BASE/config/plugins/$PDIR/kodi.json"
+    echo "<WARNING> ist nicht lesbar (kein gueltiges JSON). Die Oberflaeche legt sie beim"
+    echo "<WARNING> ersten Aufruf als kodi.json.kaputt beiseite und liest die Zweitschrift"
+    echo "<WARNING> $BASE/config/plugins/$PDIR.backup.json, falls es sie gibt."
 else
     echo "<OK> Update abgeschlossen. Es lagen keine gespeicherten Einstellungen vor."
 fi

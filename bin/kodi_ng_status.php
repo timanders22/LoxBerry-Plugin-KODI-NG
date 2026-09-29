@@ -184,6 +184,7 @@ $ko_autostart = isset($ko_st['kodiautostart']) ? (int) $ko_st['kodiautostart'] :
 $ko_erreichbar = null;
 $ko_wiedergabe = null;
 $ko_titel      = null;
+$ko_titel_ok   = true;
 $ko_rpc_meldung = '';
 
 if ($ko_faellig && (string) $ko_cfg['rpc_ein'] === '1') {
@@ -195,6 +196,7 @@ if ($ko_faellig && (string) $ko_cfg['rpc_ein'] === '1') {
      * Falschaussage: stop ist eine Aussage ueber Kodi, "-" eine ueber uns. */
     $ko_wiedergabe = $z['wiedergabe'];
     $ko_titel      = $z['titel'];
+    $ko_titel_ok   = !empty($z['titel_ok']);
 }
 
 /* ---------- senden ---------- */
@@ -249,7 +251,13 @@ $ko_werte = array(
 $ko_abraeumen = array();
 $ko_altlage = '';
 if (!$ko_trocken) {
-    $ko_alt = ko_mqtt_altlast($ko_cfg['mqtt_topic'] !== '' ? $ko_cfg['mqtt_topic'] : 'kodi');
+    /* Bei ausgeschaltetem JSON-RPC bekommen wiedergabe und titel nie wieder
+     * einen Wert. Bis 1.2.11 blieb ihr letzter Stand (etwa play und ein
+     * Filmtitel) fuer immer retained stehen (Befund M1, 29.09.2026). Jetzt
+     * werden sie behandelt wie erreichbar: Broker fragen, Belegtes im vollen
+     * Lauf abraeumen, Merker erst auf Bestaetigung. */
+    $ko_alt = ko_mqtt_altlast($ko_cfg['mqtt_topic'] !== '' ? $ko_cfg['mqtt_topic'] : 'kodi',
+        (string) $ko_cfg['rpc_ein'] === '1' ? array() : array('wiedergabe', 'titel'));
     $ko_altlage = $ko_alt['lage'];
     foreach ($ko_alt['themen'] as $ko_th) {
         if (isset($ko_werte[$ko_th])) {
@@ -273,6 +281,12 @@ if (!$ko_trocken) {
 $ko_fluechtig = array();
 if ($ko_wiedergabe === '-' || ($ko_erreichbar !== null && $ko_erreichbar !== 1)) {
     $ko_fluechtig = array('wiedergabe', 'titel');
+} elseif ($ko_titel !== null && !$ko_titel_ok) {
+    /* Player.GetItem scheiterte (Befund M4, 29.09.2026): der Strich ist dann
+     * eine Aussage ueber den Abruf, nicht ueber Kodi. Bis 1.2.11 ueberschrieb
+     * er retained den zuletzt gemeldeten Titel. Ein wirklich leerer Titel
+     * (titel_ok) bleibt retained "-". */
+    $ko_fluechtig = array('titel');
 }
 
 list($ko_n, $ko_meldung, $ko_versucht, $ko_zeilen)

@@ -2,7 +2,7 @@
 
 use LoxBerry::System;
 use CGI;
-use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
+use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK);
 use warnings;
 use strict;
 
@@ -55,6 +55,10 @@ my $configtxt = -f "/boot/firmware/config.txt" ? "/boot/firmware/config.txt" : "
 # und nicht mit Vorgaben weitergerechnet.
 my $addon_id = "service.callback.handler";
 my @kodi_heim = ("/home/kodi", "/var/lib/kodi");
+# Hoechstens so viel wird als root aus /home/kodi gelesen (datei_sicher_lesen).
+my $lese_grenze = 1048576;
+# Grund, warum addon_lesen() die Datei nicht lesen konnte; leer = gelesen.
+our $addon_lesefehler = '';
 
 # ------------------------------------------------------------------
 # Eingaben pruefen - HIER, nicht nur im Aufrufer.
@@ -289,17 +293,37 @@ if ($action eq "service") {
 # Einspielen des Plugins, und dabei mit Sicherungskopie.
 if ($action eq "advread") {
 	my $datei;
+	my $adv_heim;
 	foreach my $h (@kodi_heim) {
 		my $d = "$h/.kodi/userdata/advancedsettings.xml";
-		if (-e $d) { $datei = $d; last; }
+		if (-e $d) { $datei = $d; $adv_heim = $h; last; }
 	}
 	if (!defined $datei) {
 		print kopf(-type => 'application/json;charset=utf-8', -status => "200 OK");
 		print '{"status":"OK","error":0,"vorhanden":0}';
 		exit;
 	}
-	my $inhalt = '';
-	if (open(my $fh, '<', $datei)) { local $/; $inhalt = <$fh>; close $fh; }
+	# Keinem Verweis folgen und an keiner FIFO haengenbleiben (Befund K4,
+	# 29.09.2026). Bis 1.2.11 las advread ueber open() - einem Verweis folgte
+	# es als root (gemessen: eine Datei ausserhalb der Heimat wurde gelesen),
+	# und eine FIFO hielt Helfer und Oberflaeche fest (timeout 5 -> rc 124).
+	# Dieselbe Pruefung wie bei addonread.
+	my $adv_verweis = verweis_im_pfad($adv_heim, $datei);
+	if ($adv_verweis ne '') {
+		print STDERR "advread abgewiesen: $adv_verweis\n";
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"symlink in path\", \"detail\": \""
+			. json_text($adv_verweis) . "\"}";
+		exit 1;
+	}
+	my ($inhalt, $adv_fehler) = datei_sicher_lesen($datei);
+	if (!defined $inhalt) {
+		print STDERR "advread abgewiesen: $adv_fehler\n";
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"file not readable\", \"detail\": \""
+			. json_text($adv_fehler) . "\"}";
+		exit 1;
+	}
 	# Kein XML-Parser fuer zwei Angaben: gesucht sind genau die beiden
 	# Elemente, die der Webserver braucht.
 	#
@@ -339,6 +363,14 @@ if ($action eq "addonread") {
 		exit 1;
 	}
 	my %w = addon_lesen($datei);
+	# Nicht lesbar ist nicht "leer" (Befund K4): eine FIFO, eine zu grosse
+	# oder keine regulaere Datei wird abgewiesen, nicht als leere Liste gemeldet.
+	if ($addon_lesefehler ne '') {
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"file not readable\", \"detail\": \""
+			. json_text($addon_lesefehler) . "\"}";
+		exit 1;
+	}
 	print kopf(-type => 'application/json;charset=utf-8', -status => "200 OK");
 	print '{"status":"OK","error":0,"datei":"' . json_text($datei) . '","werte":{'
 		. join(',', map { '"' . json_text($_) . '":"' . json_text($w{$_}) . '"' } sort keys %w)
@@ -443,6 +475,16 @@ if ($action eq "addonwrite") {
 	# Ein unbekannter Schluessel wird NICHT stillschweigend fallengelassen:
 	# er koennte zu einer neueren Fassung des Addons gehoeren.
 	my %alle = (-e $datei) ? addon_lesen($datei) : ();
+	# Liess sich die vorhandene Datei nicht lesen (Befund K4: FIFO, zu gross,
+	# keine regulaere Datei), wird NICHT geschrieben - sonst gingen alle
+	# Einstellungen verloren, die nicht in diesem Aufruf stehen.
+	if ((-e $datei) && $addon_lesefehler ne '') {
+		print STDERR "addonwrite abgewiesen: $addon_lesefehler\n";
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"file not readable\", \"detail\": \""
+			. json_text($addon_lesefehler) . "\"}";
+		exit 1;
+	}
 	foreach my $k (keys %neu) { $alle{$k} = $neu{$k}; }
 
 	# Geschrieben wird die Schreibweise ab Kodi 19 "Matrix". Dieses Addon
@@ -656,14 +698,13 @@ sub addon_lesen
 {
 	my ($datei) = @_;
 	my %w;
-	open(my $fh, '<', $datei) or do {
-		print STDERR "Could not open '$datei': $!\n";
+	$addon_lesefehler = '';
+	my ($roh, $fehler) = datei_sicher_lesen($datei);
+	if (!defined $roh) {
+		print STDERR "Could not read '$datei': $fehler\n";
+		$addon_lesefehler = $fehler;
 		return %w;
-	};
-	local $/ = undef;
-	my $roh = <$fh>;
-	close $fh;
-	return %w if (!defined $roh);
+	}
 
 	# Zwischen id="…" und dem Ende des Anfangszeichens duerfen WEITERE
 	# Attribute stehen. Kodi schreibt eine Einstellung, die auf ihrem
@@ -748,6 +789,52 @@ sub kodi_laeuft_nicht
 	return 'kodi running' if ($rc == 0);
 	return "pgrep: rc=$rc" if ($rc != 1);
 	return '';
+}
+
+# Eine Datei als root LESEN, ohne sich festhalten zu lassen (Befund K4,
+# 29.09.2026). Jedes Kodi-Addon laeuft als kodi und kann unter /home/kodi statt
+# der Datei eine FIFO oder einen Verweis ablegen; open() auf eine FIFO wartet,
+# bis jemand schreibt (gemessen: timeout 5 -> rc 124, Helfer und Webserver
+# standen). Deshalb:
+#   O_NOFOLLOW   der letzte Bestandteil darf kein Verweis sein
+#   O_NONBLOCK   eine FIFO haelt das Oeffnen nicht auf
+#   -f am Dateizeiger  gelesen wird nur eine regulaere Datei - geprueft am
+#                geoeffneten Zeiger, nicht am Namen, der inzwischen getauscht
+#                sein koennte
+#   $lese_grenze nicht mehr als 1 MB in den Speicher
+# Rueckgabe: (Inhalt, '') oder (undef, Grund).
+sub datei_sicher_lesen
+{
+	my ($datei) = @_;
+	my $fh;
+	if (!sysopen($fh, $datei, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)) {
+		return (undef, "open failed: $!");
+	}
+	if (!-f $fh) {
+		close $fh;
+		return (undef, 'not a regular file');
+	}
+	my $groesse = -s _;
+	if (defined $groesse && $groesse > $lese_grenze) {
+		close $fh;
+		return (undef, "too large: $groesse bytes");
+	}
+	my $inhalt = '';
+	my $n;
+	while (($n = sysread($fh, my $stueck, 65536))) {
+		$inhalt .= $stueck;
+		if (length($inhalt) > $lese_grenze) {
+			close $fh;
+			return (undef, 'too large');
+		}
+	}
+	if (!defined $n) {
+		my $grund = "$!";
+		close $fh;
+		return (undef, "read failed: $grund");
+	}
+	close $fh;
+	return ($inhalt, '');
 }
 
 # Gibt es unterhalb des Heimatverzeichnisses einen Pfadbestandteil, der ein

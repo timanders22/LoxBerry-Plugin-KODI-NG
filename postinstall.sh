@@ -56,6 +56,28 @@ fi
 # an der keine Datei liegt. Ohne jede Meldung.
 PDIR="${ARGV3:-kodi_ng}"
 
+# ---------- Die Marke "Aktualisierung laeuft" (Entscheidung 1, Befund I1) ----------
+#
+# preupgrade.sh legt sie an, und preupgrade.sh laeuft nur bei einem Update.
+# Liegt sie, ist dies eine Aktualisierung, sonst eine Neuinstallation.
+# Entschieden wird ALLEIN am Vorhandensein, ohne Altersvergleich: zwischen
+# preupgrade.sh und diesem Skript liegt die apt-Installation von Kodi, und die
+# kann laenger als eine Stunde dauern (Praezisierung des Hausherrn vom
+# 29.09.2026, gemessen an der Funkwacht). Entfernt wird sie ueber einen trap,
+# nicht am Dateiende - jeder Ausstieg nimmt sie mit, und der Rueckgabewert
+# bleibt erhalten. postupgrade.sh braucht sie nicht mehr: bei einer
+# Neuinstallation laeuft es nicht, und eine Upgrade-Sicherung aus einem
+# frueheren Vorgang hat preupgrade.sh schon weggeraeumt.
+MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
+KO_UPGRADE=0
+if [ -f "$MARKE" ]; then KO_UPGRADE=1; fi
+ko_marke_weg() {
+    ko_rc=$?
+    rm -f "$MARKE" 2>/dev/null
+    exit "$ko_rc"
+}
+trap ko_marke_weg EXIT
+
 mkdir -p "$BASE/log/plugins/$PDIR" "$BASE/config/plugins/$PDIR" \
          "$BASE/data/plugins/$PDIR" 2>/dev/null
 
@@ -98,6 +120,52 @@ else
     echo "<WARNING> Unter $CRON liegt nichts. Der Statussender wuerde nicht laufen."
 fi
 
+# ---------- Neuinstallation: Liegengebliebenes beiseitelegen (Befund I1/K5) ----------
+#
+# Entscheidung 1 des Hausherrn, 29.09.2026. Bis 1.2.11 spielte der erste
+# Seitenaufbau nach einer NEUinstallation eine liegengebliebene
+# config/plugins/<ordner>.backup.json ein - alter Kodi-Wirt, altes Kennwort,
+# Statussender und JSON-RPC eingeschaltet, ohne jede Meldung (in WSL gemessen);
+# eine liegengebliebene Upgrade-Sicherung spielte das naechste Update ein.
+# Ohne Marke werden beide nach <name>.alt verschoben - die Bibliothek
+# (ko_config) liest .alt nie - und EINMAL gemeldet; die Deinstallation raeumt
+# .alt mit ab. Bei einer Aktualisierung bleiben sie, wo sie sind.
+KO_GEMELDET=0
+ko_beiseite_melden() {
+    if [ "$KO_GEMELDET" != "1" ]; then
+        echo "<WARNING> Neuinstallation: aus einer frueheren Installation lagen gesicherte"
+        echo "<WARNING> Einstellungen da (mit dem Kodi-Kennwort im Klartext). Sie werden"
+        echo "<WARNING> NICHT eingespielt und liegen jetzt beiseite unter:"
+        KO_GEMELDET=1
+    fi
+    echo "<WARNING>   $1"
+}
+if [ "$KO_UPGRADE" != "1" ]; then
+    KO_ZW="$BASE/config/plugins/$PDIR.backup.json"
+    if [ -e "$KO_ZW" ] || [ -L "$KO_ZW" ]; then
+        if mv -f "$KO_ZW" "$KO_ZW.alt" 2>/dev/null; then
+            [ -L "$KO_ZW.alt" ] || chmod 600 "$KO_ZW.alt" 2>/dev/null
+            ko_beiseite_melden "$KO_ZW.alt"
+        else
+            echo "<WARNING> $KO_ZW liess sich nicht beiseitelegen - die Oberflaeche"
+            echo "<WARNING> spielte sie beim ersten Aufruf ein. Bitte von Hand entfernen."
+        fi
+    fi
+    KO_US="$BASE/data/plugins/$PDIR.upgrade_sicherung"
+    if [ -e "$KO_US" ] || [ -L "$KO_US" ]; then
+        rm -rf "$KO_US.alt" 2>/dev/null
+        if mv -f "$KO_US" "$KO_US.alt" 2>/dev/null; then
+            ko_beiseite_melden "$KO_US.alt"
+        else
+            echo "<WARNING> $KO_US liess sich nicht beiseitelegen - das naechste Update"
+            echo "<WARNING> spielte sie ein. Bitte von Hand entfernen."
+        fi
+    fi
+    if [ "$KO_GEMELDET" = "1" ]; then
+        echo "<WARNING> Die Deinstallation raeumt sie mit ab; wer sie nicht braucht, loescht sie."
+    fi
+fi
+
 # DIE ERSTANLEITUNG NUR, WENN KEINE EINSTELLUNGEN DA SIND.
 #
 # Dieses Skript laeuft bei der Erstinstallation UND bei jedem Upgrade
@@ -118,23 +186,62 @@ fi
 # Schlusszeile; scheitert es, steigt es mit <FAIL> aus.
 # Ohne php ist nichts pruefbar; dann steht die Anleitung.
 # Gemessen am 24.09.2026: Pruefung-KODI-NG-1.2.9/postinstall_hinweis.md.
+#
+# DREI AUSGAENGE STATT ZWEIEN (Befund I5, 29.09.2026): 0 lesbar mit Inhalt,
+# 1 fehlt, 2 kein php, 3 vorhanden, aber nicht lesbar (kein gueltiges JSON),
+# 4 leer. Bis 1.2.11 hiess "unlesbar" dasselbe wie "fehlt", und der Anwender
+# bekam die Ersteinrichtung empfohlen, obwohl seine Einstellungen in der
+# Zweitschrift lagen.
 ko_cfg_inhalt() {
     [ -f "$1" ] || return 1
     command -v php >/dev/null 2>&1 || return 2
     php -r '
-        $d = json_decode((string) @file_get_contents($argv[1]), true);
-        exit((is_array($d) && count($d) > 0) ? 0 : 1);
+        $r = @file_get_contents($argv[1]);
+        if ($r === false) { exit(3); }
+        if (trim($r) === "") { exit(4); }
+        $d = json_decode($r, true);
+        if (!is_array($d)) { exit(3); }
+        exit(count($d) > 0 ? 0 : 4);
     ' -- "$1" 2>/dev/null
 }
-if ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"; then
-    echo "<OK> Einstellungen vorhanden - eine Ersteinrichtung ist nicht noetig."
-elif ko_cfg_inhalt "$BASE/data/plugins/$PDIR.upgrade_sicherung/config/kodi.json"; then
-    echo "<INFO> Aktualisierung: die gesicherten Einstellungen werden im naechsten"
-    echo "<INFO> Schritt zurueckgestellt (postupgrade.sh)."
-else
+# Die Anleitung fuer eine Anlage ohne Einstellungen. Der Autostart von Kodi
+# ist NICHT ab Werk aus: postroot.sh schaltet ihn beim ersten Einspielen ein
+# (Befund I2; bis 1.2.11 stand hier das Gegenteil, und das Protokoll
+# widersprach sich zwei Zeilen spaeter).
+ko_anleitung() {
     echo "<INFO> Naechster Schritt: Plugin-Oberflaeche oeffnen."
-    echo "<INFO> Dort laesst sich der Kodi-Dienst starten, der Autostart und der"
-    echo "<INFO> Statussender einschalten (beide ab Werk aus), und die Vorlagen"
-    echo "<INFO> fuer Loxone Config erzeugen."
+    echo "<INFO> Dort laesst sich der Kodi-Dienst starten und der Statussender"
+    echo "<INFO> einschalten (ab Werk aus), und es entstehen die Vorlagen fuer"
+    echo "<INFO> Loxone Config. Den Autostart von Kodi schaltet die Installation"
+    echo "<INFO> beim ersten Einspielen ein; in der Oberflaeche laesst er sich abschalten."
+}
+ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"
+KO_RC=$?
+if [ "$KO_RC" = 0 ]; then
+    echo "<OK> Einstellungen vorhanden - eine Ersteinrichtung ist nicht noetig."
+elif [ "$KO_RC" != 1 ] && [ "$KO_RC" != 2 ] && [ "$KO_RC" != 4 ]; then
+    echo "<WARNING> $BASE/config/plugins/$PDIR/kodi.json ist vorhanden, aber nicht lesbar"
+    echo "<WARNING> (kein gueltiges JSON). Die Oberflaeche legt sie beim ersten Aufruf als"
+    echo "<WARNING> kodi.json.kaputt beiseite und liest die Zweitschrift"
+    echo "<WARNING> $BASE/config/plugins/$PDIR.backup.json, falls es sie gibt."
+elif [ "$KO_UPGRADE" = "1" ]; then
+    # Nur bei einer Aktualisierung ist von einer Aktualisierung die Rede
+    # (Befund I2): postupgrade.sh laeuft bei einer Neuinstallation nicht.
+    ko_cfg_inhalt "$BASE/data/plugins/$PDIR.upgrade_sicherung/config/kodi.json"
+    KO_RC=$?
+    if [ "$KO_RC" = 0 ]; then
+        echo "<INFO> Aktualisierung: die gesicherten Einstellungen werden im naechsten"
+        echo "<INFO> Schritt zurueckgestellt (postupgrade.sh)."
+    elif [ "$KO_RC" != 1 ] && [ "$KO_RC" != 2 ] && [ "$KO_RC" != 4 ]; then
+        echo "<WARNING> Aktualisierung: die gesicherte kodi.json unter"
+        echo "<WARNING> $BASE/data/plugins/$PDIR.upgrade_sicherung/config/ ist nicht lesbar"
+        echo "<WARNING> (kein gueltiges JSON). postupgrade.sh stellt sie zurueck, wie sie ist;"
+        echo "<WARNING> die Oberflaeche legt sie dann beiseite und liest die Zweitschrift"
+        echo "<WARNING> $BASE/config/plugins/$PDIR.backup.json, falls es sie gibt."
+    else
+        ko_anleitung
+    fi
+else
+    ko_anleitung
 fi
 exit 0

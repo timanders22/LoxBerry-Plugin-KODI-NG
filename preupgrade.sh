@@ -71,6 +71,35 @@ fi
 # Skript in einem Verzeichnis, das es nicht mehr gibt.
 PDIR="${ARGV3:-kodi_ng}"
 
+# DIE UPGRADE-MARKE (Entscheidung 1 des Hausherrn, 29.09.2026; Befund I1).
+#
+# data/plugins/<ordner>.upgrade_laeuft sagt postinstall.sh, dass dies eine
+# AKTUALISIERUNG ist: nur dann bleiben Zweitschrift und Upgrade-Sicherung zum
+# Zurueckspielen liegen; ohne Marke legt postinstall.sh sie als <name>.alt
+# beiseite (Neuinstallation). Entschieden wird allein am Vorhandensein, nicht
+# am Alter. Sie liegt NEBEN dem Datenordner - purge_installation loescht den
+# Ordner selbst -, und postinstall.sh entfernt sie ueber einen trap.
+#
+# Liegt sie schon, BEVOR dieses Skript sie anlegt, hat ein frueherer Versuch
+# dieses Updates nach preupgrade.sh abgebrochen - das braucht der Zweig
+# "nichts zu sichern" unten. Laesst sie sich nicht anlegen, bricht das Update
+# hier ab (vor purge_installation): ohne Marke hielte postinstall.sh es fuer
+# eine Neuinstallation und legte die Einstellungen beiseite, statt sie
+# zurueckzustellen.
+MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
+KO_MARKE_VORHER=0
+if [ -f "$MARKE" ]; then KO_MARKE_VORHER=1; fi
+mkdir -p "$BASE/data/plugins" 2>/dev/null
+if { date +%s > "$MARKE"; } 2>/dev/null && [ -s "$MARKE" ]; then
+    echo "<OK> Marke fuer die laufende Aktualisierung angelegt ($MARKE)."
+else
+    echo "<FAIL> Die Marke $MARKE liess sich nicht anlegen."
+    echo "<FAIL> Ohne sie hielte postinstall.sh dieses Update fuer eine Neuinstallation"
+    echo "<FAIL> und legte die Einstellungen beiseite. Die Aktualisierung wird"
+    echo "<FAIL> abgebrochen; die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
+fi
+
 # Geschweifte Klammern statt Rueckstrich.
 #
 # Bis 1.0.0 stand hier /tmp/$ARGV1\_upgrade. In bash beendet der Rueckstrich
@@ -168,15 +197,33 @@ else
     # Dieses Skript laeuft nur bei einem Update - "Erstinstallation" war
     # hier nie die richtige Erklaerung.
     #
-    # Und die alte Sicherung bleibt hier liegen. Genau dieser Zweig traegt
-    # den gemessenen Fall: nach einem abgebrochenen Upgrade ist der
+    # Eine vorhandene Sicherung bleibt NUR liegen, wenn die Marke schon vor
+    # diesem Lauf lag (Entscheidung 1, Befund I1, 29.09.2026). Das ist der
+    # gemessene Fall von 1.2.8: nach einem abgebrochenen Upgrade ist der
     # Konfigordner weg, die Sicherung des ersten Laufs ist die einzige
-    # Abschrift - sie darf der zweite Versuch nicht wegraeumen.
+    # Abschrift, und die Marke dieses ersten Laufs liegt noch - postinstall.sh
+    # kam nie dran. Ohne Marke stammt die Sicherung aus einem frueheren
+    # Vorgang (bis 1.2.11 wurde sie dann beim naechsten Update eingespielt,
+    # gemessen mit einem Stand von Monaten) und wird weggeraeumt.
     rm -rf "$NEU" 2>/dev/null
     echo "<INFO> Unter $BASE/config/plugins/$PDIR liegt keine Konfiguration - es gibt nichts zu sichern."
-    if [ -d "$SICHER" ]; then
-        echo "<INFO> Die Sicherung unter $SICHER bleibt liegen; sie stammt aus einem"
-        echo "<INFO> frueheren Lauf und ist unter Umstaenden die einzige Abschrift."
+    if [ -e "$SICHER" ] || [ -L "$SICHER" ]; then
+        if [ "$KO_MARKE_VORHER" = "1" ]; then
+            echo "<INFO> Die Sicherung unter $SICHER bleibt liegen: ein frueherer Versuch"
+            echo "<INFO> dieses Updates hat abgebrochen (seine Marke lag noch), sie ist die"
+            echo "<INFO> einzige Abschrift und wird im naechsten Schritt zurueckgestellt."
+        else
+            rm -rf "$SICHER" 2>/dev/null
+            if [ -e "$SICHER" ] || [ -L "$SICHER" ]; then
+                echo "<WARNING> Unter $SICHER liegt eine Sicherung aus einem frueheren Vorgang,"
+                echo "<WARNING> die sich nicht entfernen liess. postupgrade.sh spielte sie ein -"
+                echo "<WARNING> bitte von Hand entfernen."
+            else
+                echo "<WARNING> Unter $SICHER lag eine Sicherung aus einem frueheren Vorgang"
+                echo "<WARNING> (keine Marke eines abgebrochenen Updates). Sie wurde entfernt,"
+                echo "<WARNING> damit dieses Update keinen alten Stand einspielt."
+            fi
+        fi
     fi
 fi
 

@@ -137,6 +137,21 @@ $ko_raw = '';
 $ko_rawtitel = '';
 $ko_beanstandungen = array();
 
+/* Die Einmalmeldung des vorigen POST (Befund U1): nur beim GET, gelesen und
+ * sofort geloescht - ein Neuladen zeigt sie nicht noch einmal und schickt
+ * nichts erneut. */
+if (!ko_ist_post()) {
+    $ko_einmal = ko_einmal_lesen();
+    if ($ko_einmal !== null) {
+        $ko_saved          = $ko_einmal['saved'];
+        $ko_note           = $ko_einmal['note'];
+        $ko_err            = $ko_einmal['err'];
+        $ko_beanstandungen = $ko_einmal['beanstandungen'];
+        $ko_raw            = $ko_einmal['raw'];
+        $ko_rawtitel       = $ko_einmal['rawtitel'];
+    }
+}
+
 /* ============ EIN Wachposten vor allen Handlern ============
  *
  * Nicht elf Abfragen in elf Zweigen: ein Formular ohne gueltiges Merkmal wird
@@ -250,21 +265,75 @@ if (ko_ist_post()) {
                      * ungeschehen. Statt still zu scheitern, wird gesagt was
                      * ist. */
                     if ($ko_neu['addon']) {
+                        /* Die Felder, die DEM PLUGIN gehoeren (Adresse des
+                         * LoxBerry, UDP-Eingang, Schalter, Thema), kommen NICHT
+                         * aus der Sicherung, sondern aus dem Soll DIESES Geraets
+                         * (Befund U4, 29.09.2026): beim Umzug stand sonst die IP
+                         * des alten LoxBerry im Addon, und die Meldung sagte
+                         * "uebernommen". Was hier nicht zu ermitteln ist, wird
+                         * nicht geschrieben (wie beim Knopf im Reiter MQTT).
+                         * Danach wird Ist gegen Soll gehalten. */
+                        $ko_asoll = ko_addon_soll();
+                        $ko_schreib = array();
+                        $ko_vom_geraet = array();
+                        $ko_nicht = array();
+                        foreach ($ko_neu['addon'] as $ko_k => $ko_v) {
+                            if (array_key_exists($ko_k, $ko_asoll)) {
+                                if ((string) $ko_asoll[$ko_k] === '') { $ko_nicht[] = $ko_k; continue; }
+                                $ko_schreib[$ko_k] = (string) $ko_asoll[$ko_k];
+                                $ko_vom_geraet[] = $ko_k;
+                            } else {
+                                $ko_schreib[$ko_k] = $ko_v;
+                            }
+                        }
                         $ko_st = ko_status(true);
-                        if (!empty($ko_st['kodistarted'])) {
-                            $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_LAEUFT'), count($ko_neu['addon']));
+                        if (!$ko_schreib) {
+                            // Nichts, was sich hier schreiben liesse - die Zeile
+                            // unten nennt die Felder.
+                        } elseif (!empty($ko_st['kodistarted'])) {
+                            $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_LAEUFT'), count($ko_schreib));
                         } else {
                             $ko_args = array('action=addonwrite');
-                            foreach ($ko_neu['addon'] as $ko_k => $ko_v) {
+                            foreach ($ko_schreib as $ko_k => $ko_v) {
                                 $ko_args[] = escapeshellarg('a_' . $ko_k . '=' . rawurlencode($ko_v));
                             }
                             // ko_helper_json schneidet einen Kopfblock ab; bis
                             // 1.2.6 scheiterte json_decode hier an "Status: 200".
                             $ko_a = ko_helper_json(implode(' ', $ko_args));
-                            $ko_meldungen[] = (is_array($ko_a) && isset($ko_a['status']) && $ko_a['status'] === 'OK')
-                                ? sprintf(ko_t('SICH.U_ADDON'), count($ko_neu['addon']))
-                                : sprintf(ko_t('SICH.U_ADDON_FEHL'),
+                            if (is_array($ko_a) && isset($ko_a['status']) && $ko_a['status'] === 'OK') {
+                                $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON'), count($ko_schreib));
+                                if ($ko_vom_geraet) {
+                                    $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_SOLL'), ko_e(implode(', ', $ko_vom_geraet)));
+                                }
+                                // Soll: was geschrieben wurde, dazu jedes Feld des
+                                // Plugins, das dieses Geraet kennt.
+                                $ko_pruef = $ko_schreib;
+                                foreach ($ko_asoll as $ko_k => $ko_v) {
+                                    if ((string) $ko_v !== '' && !array_key_exists($ko_k, $ko_pruef)) {
+                                        $ko_pruef[$ko_k] = (string) $ko_v;
+                                    }
+                                }
+                                $ko_ist = ko_addon_lesen(true);
+                                if (!is_array($ko_ist)) {
+                                    $ko_meldungen[] = ko_t('SICH.U_ADDON_UNGEPRUEFT');
+                                } else {
+                                    $ko_ab = array();
+                                    foreach ($ko_pruef as $ko_k => $ko_v) {
+                                        if (!isset($ko_ist[$ko_k]) || (string) $ko_ist[$ko_k] !== (string) $ko_v) {
+                                            $ko_ab[] = $ko_k;
+                                        }
+                                    }
+                                    if ($ko_ab) {
+                                        $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_ABWEICHUNG'), ko_e(implode(', ', $ko_ab)));
+                                    }
+                                }
+                            } else {
+                                $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_FEHL'),
                                     ko_e(is_array($ko_a) && isset($ko_a['reason']) ? $ko_a['reason'] : '?'));
+                            }
+                        }
+                        if ($ko_nicht) {
+                            $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_NICHT_ERMITTELBAR'), ko_e(implode(', ', $ko_nicht)));
                         }
                     }
 
@@ -421,6 +490,9 @@ if (ko_ist_post()) {
          * durchgeht, wird uebernommen. */
         $ko_cfg = ko_config();
         $ko_mangel = array();
+        // Der Stand VOR dem Speichern - fuer das Abraeumen unten (M2, M3).
+        $ko_praefix_vorher = $ko_cfg['mqtt_topic'] !== '' ? (string) $ko_cfg['mqtt_topic'] : 'kodi';
+        $ko_sender_vorher = (string) $ko_cfg['sender_ein'];
         foreach (array('mqtt_topic', 'sender_takt') as $ko_k) {
             if (!isset($_POST[$ko_k])) { continue; }
             $ko_v = is_string($_POST[$ko_k]) ? ko_wert_pruefen($ko_k, $_POST[$ko_k]) : null;
@@ -438,6 +510,35 @@ if (ko_ist_post()) {
             $ko_saved = true;
             ko_config(true);
             ko_log('MQTT-Einstellungen gespeichert (Statussender ' . $ko_cfg['sender_ein'] . ').');
+            /* ZURUECKBEHALTENE THEMEN ABRAEUMEN (Befunde M2, M3, 29.09.2026).
+             * Wer den Statussender ausschaltet, will keine Themen im Broker
+             * haben; bis 1.2.11 blieben dienst, autostart, wiedergabe und titel
+             * trotzdem bis zur Deinstallation stehen - ohne Lebenszeichen
+             * daneben. Wer das Praefix wechselt, liess die Zustaende unter dem
+             * alten stehen, auch ueber die Deinstallation hinaus, die nur das
+             * eingestellte Praefix raeumt. Geraeumt wird wie dort, nur die
+             * Themen des Plugins (das Addon sendet selbst), unter dem ALTEN
+             * Praefix, mit Nachfrage beim Broker; das Ergebnis steht in der
+             * Meldung. */
+            $ko_praefix_neu = $ko_cfg['mqtt_topic'] !== '' ? (string) $ko_cfg['mqtt_topic'] : 'kodi';
+            $ko_anlass = array();
+            if ($ko_praefix_neu !== $ko_praefix_vorher) {
+                $ko_anlass[] = sprintf(ko_t('MQTT.M_ANLASS_PRAEFIX'),
+                    '<span class="sm-mono">' . ko_e(addcslashes($ko_praefix_vorher, "\0..\37\177")) . '</span>',
+                    '<span class="sm-mono">' . ko_e($ko_praefix_neu) . '</span>');
+            }
+            if ($ko_sender_vorher === '1' && (string) $ko_cfg['sender_ein'] !== '1') {
+                $ko_anlass[] = ko_t('MQTT.M_ANLASS_SENDER');
+            }
+            if ($ko_anlass) {
+                list($ko_leer_ok, $ko_leer_text) = ko_mqtt_leeren_meldung($ko_praefix_vorher);
+                $ko_leer_text = implode(' ', $ko_anlass) . ' ' . $ko_leer_text;
+                if ($ko_leer_ok) {
+                    $ko_note = $ko_note !== '' ? $ko_note . ' ' . $ko_leer_text : $ko_leer_text;
+                } else {
+                    $ko_err = $ko_err !== '' ? $ko_err . ' ' . $ko_leer_text : $ko_leer_text;
+                }
+            }
         } else {
             $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
         }
@@ -490,7 +591,19 @@ if (ko_ist_post()) {
                         }
                     }
                 }
-                if ($ko_lief) { ko_helper('action=service key=kodi value=start'); }
+                /* DEN START NACHMESSEN (Befund K6, 29.09.2026) - wie beim
+                 * Dienstknopf unten. Bis 1.2.11 wurde die Antwort verworfen und
+                 * "wieder gestartet" gemeldet, auch wo Kodi ohne Grafiktreiber
+                 * gar nicht startet. */
+                $ko_start_gelungen = true;
+                $ko_start_text = '';
+                if ($ko_lief) {
+                    ko_helper('action=service key=kodi value=start');
+                    sleep(3);
+                    $ko_st_neu = ko_status(true);
+                    $ko_start_gelungen = !empty($ko_st_neu['kodistarted']);
+                    $ko_start_text = ko_dienst_text($ko_st_neu, ko_dienst_lage(true));
+                }
                 if (!$ko_ok) {
                     $ko_err = sprintf(ko_t('ADDON.M_FEHL'),
                         ko_e(is_array($ko_a) && isset($ko_a['reason']) ? $ko_a['reason'] : '?'));
@@ -500,8 +613,12 @@ if (ko_ist_post()) {
                     $ko_err = sprintf(ko_t('ADDON.M_NACHGEMESSEN_ABWEICHUNG'), ko_e(implode(', ', $ko_ab)));
                 } else {
                     $ko_note = sprintf(ko_t('ADDON.M_OK'), count($ko_soll))
-                        . ($ko_lief ? ' ' . ko_t('ADDON.M_NEUGESTARTET') : '');
+                        . ($ko_lief && $ko_start_gelungen ? ' ' . ko_t('ADDON.M_NEUGESTARTET') : '');
                     ko_log('Addon-Einstellungen gesetzt (' . count($ko_soll) . ' Felder).');
+                }
+                if (!$ko_start_gelungen) {
+                    $ko_start_fehl = sprintf(ko_t('ADDON.M_START_FEHL'), '<b>' . ko_e($ko_start_text) . '</b>');
+                    $ko_err = $ko_err !== '' ? $ko_err . ' ' . $ko_start_fehl : $ko_start_fehl;
                 }
             }
         }
@@ -580,6 +697,21 @@ if (ko_ist_post()) {
         }
         $ko_tab = 'tab-log';
     }
+
+    /* ============ PRG: jeder POST endet mit einer Umleitung (Befund U1) ============
+     * 303 auf den Reiter, in dem der Handler stand; das Ergebnis geht als
+     * Einmalmeldung mit. Die beiden Downloads oben rufen vorher exit auf und
+     * bleiben unmittelbar. Laesst sich die Einmalmeldung nicht ablegen, wird
+     * die Seite wie bisher ohne Umleitung gezeigt - sonst ginge die Meldung
+     * verloren; das steht dann im Protokoll. */
+    if (ko_einmal_schreiben(array(
+            'saved' => $ko_saved, 'note' => $ko_note, 'err' => $ko_err,
+            'beanstandungen' => array_values($ko_beanstandungen),
+            'raw' => $ko_raw, 'rawtitel' => $ko_rawtitel))) {
+        header('Location: index.php?form=' . substr($ko_tab, 4), true, 303);
+        exit;
+    }
+    ko_log('Die Einmalmeldung liess sich nicht ablegen - die Seite wurde ohne Umleitung gezeigt.');
 }
 
 /* Fehlende Schluessel EINMAL in die Datei schreiben - danach heisst "fehlt"
@@ -916,6 +1048,20 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 <h2><?= ko_e(ko_t('SICH.H_SICHERUNG')) ?></h2>
 <div class="sm-warnung"><?= ko_t('SICH.GEHEIM') ?></div>
 <div class="sm-hilfe"><?= ko_t('SICH.HINWEIS') ?></div>
+<?php
+/* Gespeicherte Werte, die das Zurueckspielen abweisen wuerde (Befund U3,
+ * 29.09.2026) - hier am Knopf genannt, weil die Sicherung sie nur als Hinweis
+ * fuehrt. Das Passwort wird nicht gezeigt. */
+$ko_altwerte = ko_cfg_altwerte();
+if ($ko_altwerte) {
+    $ko_aw = array();
+    foreach ($ko_altwerte as $ko_k => $ko_v) {
+        $ko_aw[] = '<span class="sm-mono">' . ko_e($ko_k) . ' = '
+            . ko_e($ko_k === 'kodi_pass' ? '***' : addcslashes($ko_v, "\0..\37\177")) . '</span>';
+    }
+    ?>
+<div class="sm-warnung"><?= sprintf(ko_t('SICH.ALTWERT'), implode(', ', $ko_aw)) ?></div>
+<?php } ?>
 <!-- ZWEI GETRENNTE FORMULARE. Das Sichern schickt einen Download und ruft exit
      auf; das Zurueckspielen braucht enctype="multipart/form-data". Wer beides
      in ein Formular legt, bekommt entweder keinen Upload oder einen Download,

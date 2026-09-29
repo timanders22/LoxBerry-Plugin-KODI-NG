@@ -80,6 +80,21 @@ ko_datei_sichern() {
     return 1
 }
 
+# DEN ZUSTAND VON KODI MERKEN, BEVOR ES ANGEHALTEN WIRD (Befund I3, 29.09.2026).
+#
+# Bis 1.2.11 hielt jedes Update - mit AUTOMATIC_UPDATES auch nachts - ein
+# laufendes Kodi an und startete es nicht wieder, und ein bewusst
+# abgeschalteter Autostart wurde bei jedem Update wieder eingeschaltet
+# (Schein-root gemessen: disabled/active vorher, enabled/inactive danach).
+# Jetzt: eingeschaltet wird der Autostart nur bei der ersten Einrichtung (es
+# gibt noch keine Unit) oder wenn er vorher an war; lief Kodi, wird es am Ende
+# wieder gestartet (Regeln/06, "Nach einem Update laeuft wieder, was lief").
+KO_UNIT_VORHER=0
+if [ -f /etc/systemd/system/kodi_ng.service ]; then KO_UNIT_VORHER=1; fi
+KO_AUTOSTART_VORHER=$(systemctl is-enabled kodi_ng 2>/dev/null)
+KO_LIEF_VORHER=0
+if [ "$(systemctl is-active kodi_ng 2>/dev/null)" = "active" ]; then KO_LIEF_VORHER=1; fi
+
 echo "<INFO> Stopping Kodi if it is running..."
 systemctl stop kodi_ng 2>/dev/null || true
 systemctl stop kodi 2>/dev/null || true
@@ -140,7 +155,10 @@ if [ -n "$KO_PKG" ] && [ -f "$KO_PKG/data/kodi_ng.service" ]; then
     if cp -f "$KO_PKG/data/kodi_ng.service" /etc/systemd/system/kodi_ng.service; then
         chmod 644 /etc/systemd/system/kodi_ng.service
         systemctl daemon-reload
-        if systemctl enable kodi_ng 2>/dev/null; then
+        if [ "$KO_UNIT_VORHER" = "1" ] && [ "$KO_AUTOSTART_VORHER" != "enabled" ]; then
+            echo "<INFO> Der Autostart von Kodi bleibt, wie er vor dem Update eingestellt"
+            echo "<INFO> war (systemctl is-enabled: '${KO_AUTOSTART_VORHER:-nicht feststellbar}')."
+        elif systemctl enable kodi_ng 2>/dev/null; then
             echo "<OK> Kodi startet kuenftig automatisch mit dem System."
         else
             echo "<WARNING> systemctl enable kodi_ng ist fehlgeschlagen - bitte im"
@@ -393,6 +411,29 @@ chown -hR kodi:kodi /home/kodi
 # Das Heimatverzeichnis muss dem Benutzer gehoeren, aber nicht der Welt
 # offenstehen: darin liegen die Zugangsdaten der Medienquellen.
 chmod 750 /home/kodi
+
+# Lief Kodi vor dem Update, laeuft es danach wieder (Befund I3). Gestartet wird
+# erst hier, wenn Unit, advancedsettings.xml und Addon eingespielt sind; die
+# Startsperre wird vorher geloest (Regeln/06, reset-failed), und nachgemessen
+# wird nach drei Sekunden - ohne Grafiktreiber stuerzt Kodi erst nach ein,
+# zwei Sekunden ab.
+if [ "$KO_LIEF_VORHER" = "1" ]; then
+    systemctl reset-failed kodi_ng 2>/dev/null || true
+    if [ -f /etc/systemd/system/kodi_ng.service ] && timeout 60 systemctl start kodi_ng 2>/dev/null; then
+        sleep 3
+        KO_NACH=$(systemctl is-active kodi_ng 2>/dev/null)
+        if [ "$KO_NACH" = "active" ]; then
+            echo "<OK> Kodi lief vor dem Update und wurde wieder gestartet (nachgemessen: active)."
+        else
+            echo "<WARNING> Kodi lief vor dem Update; nach dem Start ist es nicht aktiv"
+            echo "<WARNING> (systemctl is-active: '${KO_NACH:-nicht feststellbar}'). Pruefen mit:"
+            echo "<WARNING>   systemctl status kodi_ng"
+        fi
+    else
+        echo "<WARNING> Kodi lief vor dem Update und liess sich danach nicht starten."
+        echo "<WARNING> Pruefen mit: systemctl status kodi_ng"
+    fi
+fi
 
 # 1 bei jedem <FAIL> oben, sonst 0 - nie mehr als 1 (siehe Kopf).
 if [ "$KO_FEHLER" -ne 0 ]; then

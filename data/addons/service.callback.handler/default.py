@@ -43,6 +43,10 @@ __addonname__ = __addon__.getAddonInfo('name')
 THEMEN = ('event', 'movie_title', 'music_title', 'episode_title',
           'unknown_title', 'screensaver')
 
+# Themen, die nie retained hinausgehen - muss zur Spalte retain in ko_themen()
+# des Plugins passen.
+NIE_RETAIN = ('event',)
+
 # Die Medienarten, die playing_type() liefern kann. Zu jeder gehoert ein
 # Titelthema <art>_title.
 ARTEN = ('movie', 'episode', 'music', 'unknown')
@@ -261,10 +265,11 @@ def mqtt_wert(wert):
 def send_mqtt(zweig, nutzlast):
     """Ein Thema ueber den UDP-Eingang des MQTT-Gateways senden.
 
-    Alle Themen dieses Addons sind Zustaende (letztes Ereignis, laufender
-    Titel, Bildschirmschoner an/aus) und gehen retained hinaus - Hausstandard
-    seit 03.09.2026. Ein Lebenszeichen oder ein Messwert mit Zeitbezug ist
-    nicht darunter.
+    Die Zustaende dieses Addons (laufender Titel, Bildschirmschoner an/aus)
+    gehen retained hinaus - Hausstandard seit 03.09.2026. Das Ereignis
+    (event) ist kein Zustand und geht fluechtig hinaus (NIE_RETAIN,
+    Entscheidung 3 vom 29.09.2026). Ein Lebenszeichen oder ein Messwert mit
+    Zeitbezug ist nicht darunter.
     """
     ziel = ziele['mqtt']
     if not ziel:
@@ -280,7 +285,10 @@ def send_mqtt(zweig, nutzlast):
     wert = mqtt_wert(nutzlast)
     # Zweite Sicherung (Regeln/07): ein leerer Wert geht NIE retained hinaus,
     # auch wenn mqtt_wert() einmal geaendert wird - er loeschte das Thema.
-    befehl = 'retain' if wert != '' else 'publish'
+    # event ist ein Ereignis, kein Zustand (Entscheidung 3 vom 29.09.2026):
+    # retained kaeme das letzte Ereignis nach jedem Neustart von Broker oder
+    # Gateway erneut als frisch am Miniserver an. Es geht fluechtig hinaus.
+    befehl = 'retain' if wert != '' and zweig not in NIE_RETAIN else 'publish'
     send_raw_udp('%s %s/%s %s' % (befehl, thema, zweig, wert),
                  (adresse, port), 'MQTT-Gateway')
 
@@ -294,7 +302,8 @@ def send_event(event, value=None):
     #    Befehlserkennungen daran.
     if ziele['udp']:
         send_raw_udp(text, ziele['udp'], 'UDP')
-    # 2) MQTT ueber das LoxBerry MQTT Gateway (UDP-Schnittstelle, retained)
+    # 2) MQTT ueber das LoxBerry MQTT Gateway (UDP-Schnittstelle; retained
+    #    ausser event, siehe send_mqtt)
     if value is None:
         send_mqtt('event', event)
     else:
@@ -496,7 +505,7 @@ class MyPlayer(xbmc.Player):
 def startzustand_senden(player):
     """Die zurueckbehaltenen Themen beim Start auf einen ehrlichen Stand setzen.
 
-    WARUM: alle Themen sind retained. Faellt der Strom waehrend eines Films
+    WARUM: die Zustandsthemen sind retained. Faellt der Strom waehrend eines Films
     aus, kommt weder onPlayBackStopped noch kodi_stopped - und movie_title
     stuende nach dem Neustart fuer immer mit dem alten Film im Broker, ebenso
     "screensaver on". Loxone bekaeme beides nach jedem Neustart des Gateways
@@ -510,8 +519,8 @@ def startzustand_senden(player):
         Wert, den das Addon auch beim Stoppen fuer "kein Titel" sendet.
       * screensaver: der gemessene Zustand aus Kodi
         (System.ScreenSaverActive), nicht ein angenommener.
-      * event: nichts hier - kodi_started folgt unmittelbar danach und
-        ersetzt das alte Ereignis.
+      * event: nichts hier - es ist nicht retained, im Broker steht davon
+        nichts, und kodi_started folgt unmittelbar danach.
 
     NUR ueber MQTT. Am UDP-Eingang des Miniservers bleibt nichts stehen, was
     aufzuraeumen waere, und jede zusaetzliche UDP-Zeile koennte dort eine

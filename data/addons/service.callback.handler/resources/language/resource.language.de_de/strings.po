@@ -1,7 +1,7 @@
 # Kodi language file
 # Addon Name: LoxBerry Kodi Callback Handler
 # Addon id: service.callback.handler
-# Addon version: 3.2.0
+# Addon version: 3.2.1
 # Addon Provider: christiantf
 #
 # HIER STAND BIS 1.1.9 DER UNVERAENDERTE KOPF AUS DEM XBMC-UEBERSETZUNGSNETZ:

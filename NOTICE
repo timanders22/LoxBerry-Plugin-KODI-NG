@@ -26,7 +26,7 @@ bin/kodi-rpc
 
 data/addons/service.callback.handler/
     Kodi-Addon "LoxBerry Kodi Callback Handler", provider-name christiantf,
-    seit 1.2.7 Addon-Fassung 3.2.0 (geaendert, siehe changelog.txt im Addon).
+    seit 1.2.12 Addon-Fassung 3.2.1 (geaendert, siehe changelog.txt im Addon).
     Der Kopf von default.py nennt "Copyright (C) 2015 Tefi" und die GNU
     General Public License Version 3 oder spaeter; Tefis Kopf stammt nach
     seinem Wortlaut aus service.xbmc.callbacks (Team-XBMC,

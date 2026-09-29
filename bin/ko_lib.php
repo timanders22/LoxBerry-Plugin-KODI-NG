@@ -284,7 +284,13 @@ if (!function_exists('ko_wirt_form')) {
 if (!function_exists('ko_wert_pruefen')) {
     function ko_wert_pruefen($schluessel, $wert)
     {
-        $w = trim((string) $wert);
+        /* Zugangsdaten werden NICHT getrimmt (Befund U2, 29.09.2026): bis
+         * 1.2.11 wurde aus " geheim " still "geheim", Kodi antwortete danach
+         * mit 401, und die Oberflaeche hatte "gespeichert" gemeldet. Fuer
+         * Adresse, Port, Thema und Takt darf das Formular Leerraum am Rand
+         * abschneiden - es speichert und zeigt den gekuerzten Wert. */
+        $w = in_array($schluessel, array('kodi_user', 'kodi_pass'), true)
+            ? (string) $wert : trim((string) $wert);
         switch ($schluessel) {
             case 'mqtt_topic':
                 /* DIESELBE Positivliste wie im Helfer (%addon_muster in
@@ -297,7 +303,10 @@ if (!function_exists('ko_wert_pruefen')) {
                  *
                  * # und + sind ausserdem MQTT-Platzhalter und in einem Thema,
                  * unter dem VEROEFFENTLICHT wird, unzulaessig. */
-                $w = trim($w, '/');
+                /* Ein Schraegstrich am Rand wird ABGEWIESEN, nicht still
+                 * abgeschnitten (Befund U2): aus "/kodi/" wurde bis 1.2.11
+                 * "kodi" - ein anderes Praefix, als eingegeben war. */
+                if ($w !== '' && ($w[0] === '/' || substr($w, -1) === '/')) { return null; }
                 return preg_match('#^[A-Za-z0-9._/-]{1,64}$#', $w) ? $w : null;
             case 'kodi_host':
                 /* Seit 1.2.7 eine Positivliste - bis 1.2.6 wurden nur
@@ -318,9 +327,11 @@ if (!function_exists('ko_wert_pruefen')) {
                 return ($n >= 1 && $n <= 65535) ? (string) $n : null;
             case 'kodi_user':
             case 'kodi_pass':
-                // Zugangsdaten werden NICHT gefiltert, nur von Steuerzeichen
-                // befreit - ein Passwort darf alles enthalten.
-                return preg_replace('/[\x00-\x1F\x7F]/', '', $w);
+                // Zugangsdaten werden NICHT gefiltert und nicht getrimmt - ein
+                // Passwort darf alles enthalten ausser Steuerzeichen. Die werden
+                // seit dem Befund U2 ABGEWIESEN statt still entfernt: aus
+                // "tab<Tabulator>pw" wurde bis 1.2.11 "tabpw".
+                return preg_match('/[\x00-\x1F\x7F]/', $w) ? null : $w;
             case 'sender_ein':
             case 'rpc_ein':
                 return in_array($w, array('0', '1'), true) ? $w : null;
@@ -333,6 +344,28 @@ if (!function_exists('ko_wert_pruefen')) {
                 return ($n >= 60 && $n <= 3600) ? (string) $n : null;
         }
         return null;
+    }
+}
+
+/** Nimmt das ZURUECKSPIELEN diesen Wert an? Rueckgabe: der Wert, oder null.
+ *
+ *  Strenger als das Formular (Befund U2, 29.09.2026; Regeln/05, Ergaenzung
+ *  24.09.2026: beim Zurueckspielen gilt das Abweisen): ein Wert mit Leerraum
+ *  am Rand oder mit Steuerzeichen wird abgewiesen, nicht gekuerzt. Er kann nur
+ *  hexadezimal in die Datei gekommen sein, also von Hand. Fuer Benutzer und
+ *  Passwort gehoert Leerraum am Rand zum Wert und bleibt.
+ *
+ *  Dieselbe Pruefung entscheidet beim Sichern, welcher gespeicherte Wert nur
+ *  als Hinweis in die Datei kommt (Befund U3, ko_cfg_altwerte()). */
+if (!function_exists('ko_wert_zurueckspielbar')) {
+    function ko_wert_zurueckspielbar($schluessel, $wert)
+    {
+        $w = (string) $wert;
+        if (preg_match('/[\x00-\x1F\x7F]/', $w)) { return null; }
+        if (!in_array($schluessel, array('kodi_user', 'kodi_pass'), true) && trim($w) !== $w) {
+            return null;
+        }
+        return ko_wert_pruefen($schluessel, $w);
     }
 }
 
@@ -392,9 +425,19 @@ if (!function_exists('ko_json_schreiben')) {
         $fh = @fopen($tmp, 'c');
         if ($fh === false) { return false; }
         if ($rechte !== null) { @chmod($tmp, $rechte); }
-        $ok = ftruncate($fh, 0) && fwrite($fh, $json) !== false;
-        fflush($fh);
-        fclose($fh);
+        /* ZAEHLEN, NICHT HOFFEN (Befund K1, 29.09.2026). Bei voller Karte oder
+         * Groessengrenze liefert fwrite() die Zahl der geschriebenen Bytes,
+         * nicht false - "!== false" hielt 2048 von 3199 Byte fuer gelungen
+         * (in WSL gemessen). Jetzt muessen genau strlen Bytes, fflush und
+         * fclose gelingen, und die Nebendatei wird zurueckgelesen, bevor sie
+         * ihren Namen bekommt. */
+        $ok = ftruncate($fh, 0) && fwrite($fh, $json) === strlen($json);
+        $ok = fflush($fh) && $ok;
+        $ok = fclose($fh) && $ok;
+        if ($ok) {
+            clearstatcache(true, $tmp);
+            $ok = (@file_get_contents($tmp) === $json);
+        }
         if (!$ok) { @unlink($tmp); return false; }
         if (!@rename($tmp, $pfad)) { @unlink($tmp); return false; }
         return true;
@@ -644,6 +687,18 @@ if (!function_exists('ko_config_schreiben')) {
     {
         $p = ko_paths();
         if (!ko_json_schreiben($p['config'], $cfg, 0600)) { return false; }
+        /* Die Zweitschrift erst, wenn die Hauptdatei ZURUECKGELESEN den
+         * geschriebenen Stand traegt (Befund K1). Bis 1.2.11 entstanden beide
+         * Kopien aus demselben Speicherinhalt, ohne dass die Hauptdatei je
+         * gelesen wurde - eine abgeschnittene Datei stand dann zweimal da. */
+        $ko_fl = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        clearstatcache(true, $p['config']);
+        $ko_zurueck = json_decode(ko_lesen($p['config']), true);
+        if (!is_array($ko_zurueck) || json_encode($ko_zurueck, $ko_fl) !== json_encode($cfg, $ko_fl)) {
+            ko_log('FEHLER: ' . $p['config'] . ' traegt nach dem Schreiben nicht den geschriebenen '
+                 . 'Stand - die Zweitschrift bleibt unberuehrt.');
+            return false;
+        }
         if (!ko_json_schreiben($p['zweit'], $cfg, 0600)) {
             ko_log('FEHLER: Zweitschrift ' . $p['zweit'] . ' liess sich nicht schreiben.');
             return false;
@@ -720,7 +775,11 @@ if (!function_exists('ko_helper')) {
          * Anlage deren Helfer (in WSL gemessen, Pruefung-KODI-NG-1.2.10,
          * Fall A6). */
         if ($p['home'] === '') { return ''; }
-        $cmd = 'sudo ' . escapeshellcmd($p['bin'] . '/elevatedhelper.pl') . ' ' . $args . ' 2>/dev/null';
+        /* Mit Zeitschranke und ohne Rueckfrage (Befund K4, 29.09.2026): bis
+         * 1.2.11 wartete shell_exec ohne Grenze, und eine FIFO unter
+         * /home/kodi hielt Helfer und Seitenaufbau fest. -n: sudo fragt nie
+         * nach einem Kennwort, sondern scheitert. */
+        $cmd = 'timeout 15 sudo -n ' . escapeshellcmd($p['bin'] . '/elevatedhelper.pl') . ' ' . $args . ' 2>/dev/null';
         return (string) @shell_exec($cmd);
     }
 }
@@ -1228,6 +1287,19 @@ if (!function_exists('ko_mqtt_publish')) {
     {
         $cfg = ko_config();
         $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
+        /* DAS GESPEICHERTE PRAEFIX WIRD VOR DEM SENDEN GEPRUEFT (Befund K3,
+         * 29.09.2026) - mit derselben Pruefung wie im Formular. Bis 1.2.6 nahm
+         * die Oberflaeche Praefixe wie "kodi+1" oder "wohn#zimmer" an, und sie
+         * ueberstehen jedes Update. Am Gateway trennt ein Leerzeichen Thema und
+         * Wert, ein Zeilenumbruch schleust eine zweite Zeile ein. Ungueltig
+         * heisst: nichts senden und es sagen, nie still ein anderes Praefix.
+         * Protokolliert wird beim Aufrufer, gebremst (siehe unten). */
+        if (ko_wert_pruefen('mqtt_topic', $prefix) !== $prefix) {
+            $ko_werte_n = 0;
+            foreach ($paare as $ko_v) { if ($ko_v !== null) { $ko_werte_n++; } }
+            return array(0, 'Themenpraefix unzulaessig: "' . addcslashes($prefix, "\0..\37\177\"\\")
+                . '" - im Reiter MQTT berichtigen', $ko_werte_n, array());
+        }
         $zeilen = array();
         $loesch = array();   // Stellen der Loeschzeilen in $zeilen
         foreach ($abraeumen as $a) {
@@ -1297,7 +1369,8 @@ if (!function_exists('ko_mqtt_publish')) {
 
 /**
  * Die Themen, deren zurueckbehaltener ALTWERT abgeraeumt wird: jedes Thema
- * des Plugins, das heute NICHT retained hinausgeht.
+ * des Plugins oder des Addons, das heute NICHT retained hinausgeht (beim
+ * Addon seit 1.2.12 event, das bis 1.2.11 retained ging).
  *
  * Eine Umstellung von retain auf publish loescht nichts - der alte Wert steht
  * im Broker weiter und wird nach jedem Neustart von Broker oder Gateway
@@ -1313,7 +1386,7 @@ if (!function_exists('ko_mqtt_altlast_liste')) {
     {
         $l = array();
         foreach (ko_themen() as $t) {
-            if ($t['quelle'] === 'plugin' && empty($t['retain'])) { $l[] = $t['name']; }
+            if (empty($t['retain'])) { $l[] = $t['name']; }
         }
         return $l;
     }
@@ -1501,10 +1574,17 @@ if (!function_exists('ko_mqtt_behalten_liste')) {
  * nachgefragt. Bauart tb_mqtt_altlast(), Spotpreis-Tibber 0.9.19.
  */
 if (!function_exists('ko_mqtt_altlast')) {
-    function ko_mqtt_altlast($praefix)
+    function ko_mqtt_altlast($praefix, $zusatz = array())
     {
         $praefix = (string) $praefix;
         $liste = ko_mqtt_altlast_liste();
+        /* $zusatz: retained Themen, die in dieser Lage nicht mehr gesendet
+         * werden und deshalb wie ein Altwert abgeraeumt werden (Befund M1,
+         * 29.09.2026: wiedergabe und titel bei ausgeschaltetem JSON-RPC). Sie
+         * stehen in der Kennung des Merkers - ein anderer Satz fragt neu. */
+        foreach ((array) $zusatz as $ko_z) {
+            if (!in_array((string) $ko_z, $liste, true)) { $liste[] = (string) $ko_z; }
+        }
         $p = ko_paths();
         $merker = $p['data'] . '/retain_altlast_bestaetigt';
         $kennung = 'leer-bestaetigt ' . $praefix . ': ' . implode(' ', $liste);
@@ -1577,37 +1657,99 @@ if (!function_exists('ko_mqtt_leeren')) {
     {
         $cfg = ko_config();
         $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
-        if (trim($prefix, '/') === '' || preg_match('/[#+\s]/', $prefix)) {
+        /* Der Kern steht seit dem Befund M2/M3 (29.09.2026) in
+         * ko_mqtt_leeren_lauf(), damit ihn auch die Oberflaeche rufen kann.
+         * Die Ausgabe hier ist Wort fuer Wort die bisherige. */
+        $e = ko_mqtt_leeren_lauf($prefix, ko_mqtt_leer_themen(), $runden, $pause_us);
+        $n = $e['n'];
+        $udp = $e['udp'];
+        if ($e['lage'] === 'praefix') {
             echo "<WARNING> MQTT: das Themenpraefix ist leer oder enthaelt einen Platzhalter oder "
                . "Leerraum - zurueckbehaltene Themen wurden nicht geleert.\n";
             return 2;
         }
-        $udp = ko_mqtt_port();
-        if (!$udp) {
+        if ($e['lage'] === 'kein_udp') {
             echo "<INFO> MQTT: in general.json steht kein UDP-Eingang des Gateways - zurueckbehaltene "
                . "Themen unter " . $prefix . "/ wurden nicht geleert.\n";
             return 2;
         }
+        if ($e['lage'] === 'nichts') {
+            echo "<OK> MQTT: der Broker bestaetigt: keines der " . $n . " Themen unter " . $prefix
+               . "/ steht zurueckbehalten - nichts zu leeren.\n";
+            return 0;
+        }
+        if ($e['lage'] === 'udp_zu') {
+            echo "<WARNING> MQTT: der UDP-Eingang 127.0.0.1:" . $udp . " war nicht erreichbar - "
+               . "zurueckbehaltene Themen unter " . $prefix . "/ wurden nicht geleert.\n";
+            return 1;
+        }
+        $offen = $e['offen'];
+        echo "<INFO> MQTT: " . $e['zu_leeren'] . " von " . $n . " Themen unter " . $prefix . "/ mit leerer "
+           . "Nutzlast an den UDP-Eingang " . $udp . " des Gateways gesendet (" . $e['datagramme']
+           . " Datagramme).\n";
+        if ($e['lage'] === 'geleert') {
+            echo "<OK> MQTT: der Broker bestaetigt: keines der " . $n . " Themen steht mehr "
+               . "zurueckbehalten.\n";
+            return 0;
+        }
+        if ($e['lage'] === 'offen') {
+            echo "<WARNING> MQTT: " . count($offen) . " Themen stehen noch zurueckbehalten im Broker ("
+               . implode(', ', array_slice($offen, 0, 5)) . (count($offen) > 5 ? ', ...' : '')
+               . "). Von Hand: mosquitto_pub -r -n -t <thema>\n";
+            return 1;
+        }
+        echo "<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang "
+           . "verwirft unter Last Datagramme; was stehen bleibt, laesst sich mit "
+           . "mosquitto_pub -r -n -t <thema> von Hand loeschen.\n";
+        return 0;
+    }
+}
+
+/**
+ * Der Kern von ko_mqtt_leeren(), ohne Ausgabe - fuer die Deinstallation UND
+ * die Oberflaeche (Befunde M2, M3, 29.09.2026: Statussender aus,
+ * Praefixwechsel). Praefix und Themen gibt der Aufrufer vor; der Ablauf ist
+ * der bisherige: Broker fragen, nur Belegtes senden, nach jeder Runde
+ * nachfragen, hoechstens $runden Runden.
+ *
+ * Rueckgabe: array mit
+ *   lage        praefix | kein_udp | nichts | udp_zu | geleert | offen | ungeprueft
+ *   praefix, udp, n (Zahl der Themen), zu_leeren, datagramme, offen (Liste)
+ */
+if (!function_exists('ko_mqtt_leeren_lauf')) {
+    function ko_mqtt_leeren_lauf($prefix, $themen, $runden = 3, $pause_us = 1000000)
+    {
+        $prefix = (string) $prefix;
+        $e = array('lage' => '', 'praefix' => $prefix, 'udp' => 0, 'n' => 0,
+                   'zu_leeren' => 0, 'datagramme' => 0, 'offen' => array());
+        if (trim($prefix, '/') === '' || preg_match('/[#+\s]/', $prefix)) {
+            $e['lage'] = 'praefix';
+            return $e;
+        }
+        $udp = ko_mqtt_port();
+        $e['udp'] = $udp;
+        if (!$udp) {
+            $e['lage'] = 'kein_udp';
+            return $e;
+        }
         $alle = array();
-        foreach (ko_mqtt_leer_themen() as $t) { $alle[] = $prefix . '/' . $t; }
-        $n = count($alle);
+        foreach ($themen as $t) { $alle[] = $prefix . '/' . $t; }
+        $e['n'] = count($alle);
         $f = ko_mqtt_behalten_liste($alle);
         $nachgelesen = ($f['lage'] === 'ok');
         $offen = $nachgelesen ? array_keys($f['belegt']) : $alle;
         if ($nachgelesen && !$offen) {
-            echo "<OK> MQTT: der Broker bestaetigt: keines der " . $n . " Themen unter " . $prefix
-               . "/ steht zurueckbehalten - nichts zu leeren.\n";
-            return 0;
+            $e['lage'] = 'nichts';
+            return $e;
         }
         $eno = 0;
         $etxt = '';
         $fp = @stream_socket_client('udp://127.0.0.1:' . $udp, $eno, $etxt, 2);
         if ($fp === false) {
-            echo "<WARNING> MQTT: der UDP-Eingang 127.0.0.1:" . $udp . " war nicht erreichbar - "
-               . "zurueckbehaltene Themen unter " . $prefix . "/ wurden nicht geleert.\n";
-            return 1;
+            $e['lage'] = 'udp_zu';
+            return $e;
         }
-        $zu_leeren = count($offen);
+        $e['zu_leeren'] = count($offen);
         $datagramme = 0;
         for ($r = 1; $r <= max(1, (int) $runden) && $offen; $r++) {
             if ($r > 1) { usleep((int) $pause_us); }
@@ -1627,24 +1769,50 @@ if (!function_exists('ko_mqtt_leeren')) {
             }
         }
         fclose($fp);
-        echo "<INFO> MQTT: " . $zu_leeren . " von " . $n . " Themen unter " . $prefix . "/ mit leerer "
-           . "Nutzlast an den UDP-Eingang " . $udp . " des Gateways gesendet (" . $datagramme
-           . " Datagramme).\n";
-        if ($nachgelesen && !$offen) {
-            echo "<OK> MQTT: der Broker bestaetigt: keines der " . $n . " Themen steht mehr "
-               . "zurueckbehalten.\n";
-            return 0;
+        $e['datagramme'] = $datagramme;
+        $e['offen'] = $offen;
+        $e['lage'] = $nachgelesen ? ($offen ? 'offen' : 'geleert') : 'ungeprueft';
+        return $e;
+    }
+}
+
+/**
+ * Fuer die Oberflaeche (Befunde M2, M3): die zurueckbehaltenen Themen DES
+ * PLUGINS unter $prefix leeren - wie die Deinstallation, aber ohne die Themen
+ * des Addons (das sendet selbst weiter) - und das Ergebnis als Satz. Eine
+ * Zeile ins Protokoll. Rueckgabe: array(ok, text); ok = false, wenn sicher
+ * etwas stehen blieb oder gar nicht geleert werden konnte.
+ */
+if (!function_exists('ko_mqtt_leeren_meldung')) {
+    function ko_mqtt_leeren_meldung($prefix)
+    {
+        $plugin = array();
+        foreach (ko_themen() as $t) {
+            if ($t['quelle'] === 'plugin') { $plugin[] = $t['name']; }
         }
-        if ($nachgelesen) {
-            echo "<WARNING> MQTT: " . count($offen) . " Themen stehen noch zurueckbehalten im Broker ("
-               . implode(', ', array_slice($offen, 0, 5)) . (count($offen) > 5 ? ', ...' : '')
-               . "). Von Hand: mosquitto_pub -r -n -t <thema>\n";
-            return 1;
+        $themen = array_values(array_intersect(ko_mqtt_leer_themen(), $plugin));
+        $e = ko_mqtt_leeren_lauf($prefix, $themen);
+        $roh = addcslashes((string) $prefix, "\0..\37\177");
+        ko_log('MQTT: zurueckbehaltene Themen des Plugins unter ' . $roh . '/ abraeumen - Ergebnis '
+            . $e['lage'] . ' (' . $e['zu_leeren'] . ' von ' . $e['n'] . ' Themen gesendet, '
+            . count($e['offen']) . ' stehen noch).');
+        $p = '<span class="sm-mono">' . ko_e($roh) . '/</span>';
+        switch ($e['lage']) {
+            case 'nichts':
+                return array(true, sprintf(ko_t('MQTT.M_LEEREN_NICHTS'), $p));
+            case 'geleert':
+                return array(true, sprintf(ko_t('MQTT.M_LEEREN_GELEERT'), $e['zu_leeren'], $p));
+            case 'ungeprueft':
+                return array(true, sprintf(ko_t('MQTT.M_LEEREN_UNGEPRUEFT'), $e['zu_leeren'], $p));
+            case 'kein_udp':
+                return array(true, sprintf(ko_t('MQTT.M_LEEREN_KEIN_UDP'), $p));
+            case 'offen':
+                return array(false, sprintf(ko_t('MQTT.M_LEEREN_OFFEN'), count($e['offen']), $p,
+                    ko_e(implode(', ', array_slice($e['offen'], 0, 5)))));
+            case 'udp_zu':
+                return array(false, sprintf(ko_t('MQTT.M_LEEREN_UDP_ZU'), $p, (int) $e['udp']));
         }
-        echo "<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang "
-           . "verwirft unter Last Datagramme; was stehen bleibt, laesst sich mit "
-           . "mosquitto_pub -r -n -t <thema> von Hand loeschen.\n";
-        return 0;
+        return array(false, sprintf(ko_t('MQTT.M_LEEREN_PRAEFIX'), $p));
     }
 }
 
@@ -1711,7 +1879,12 @@ if (!function_exists('ko_themen')) {
                   'min' => '',  'max' => '',           'schl' => 'T_WIEDERGABE',  'wschl' => 'V_WIEDERGABE'),
             array('name' => 'titel',       'quelle' => 'plugin', 'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_TITEL',       'wschl' => 'V_TEXT'),
-            array('name' => 'event',       'quelle' => 'addon',  'zahl' => false, 'retain' => true,  'leben' => false,
+            /* event ist ein Ereignis, kein Zustand (Entscheidung 3 vom
+             * 29.09.2026): bis 1.2.11 ging es retained hinaus, und nach jedem
+             * Neustart von Broker oder Gateway kam etwa "movie_started" erneut
+             * als frisches Ereignis am Miniserver an. Seither fluechtig; der
+             * Altwert wird ueber ko_mqtt_altlast_liste() abgeraeumt. */
+            array('name' => 'event',       'quelle' => 'addon',  'zahl' => false, 'retain' => false, 'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_EVENT',       'wschl' => 'V_EVENT'),
             array('name' => 'movie_title', 'quelle' => 'addon',  'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_MOVIETITLE',  'wschl' => 'V_TEXT'),
@@ -1784,6 +1957,29 @@ if (!function_exists('ko_themen_plugin_zahl')) {
    ueber 9090 spricht Loxone unmittelbar mit Kodi, dort gibt es keine
    Anmeldung und keine saubere Zeitschranke fuer eine Antwort. */
 
+/** Eine Adresse abrufen und die Kopfzeilen der Antwort dazu liefern.
+ *  Rueckgabe: array(Inhalt oder false, Kopfzeilen als Feld).
+ *
+ *  Ueber fopen() und stream_get_meta_data() statt ueber die alte
+ *  Kopfzeilen-Variable von PHP (Befund K7, 29.09.2026): 8.5 meldet sie schon
+ *  beim Uebersetzen als ueberholt ("Deprecated", gemessen mit php -l), PHP 9
+ *  soll sie abschaffen. wrapper_data gibt es unter 7.4 wie unter 8.5;
+ *  Zeitschranke und ignore_errors wirken ueber denselben Kontext wie bei
+ *  file_get_contents(). Bauart eb_http_abruf(), Einspeisebremse 0.9.26. */
+if (!function_exists('ko_http_abruf')) {
+    function ko_http_abruf($adresse, $ctx)
+    {
+        $fp = @fopen($adresse, 'r', false, $ctx);
+        if ($fp === false) { return array(false, array()); }
+        $meta = @stream_get_meta_data($fp);
+        $inhalt = @stream_get_contents($fp);
+        @fclose($fp);
+        $kopf = (is_array($meta) && isset($meta['wrapper_data']) && is_array($meta['wrapper_data']))
+            ? $meta['wrapper_data'] : array();
+        return array($inhalt, $kopf);
+    }
+}
+
 /** Ein JSON-RPC-Aufruf an Kodi. Rueckgabe: array(ok, ergebnis|fehlertext). */
 if (!function_exists('ko_rpc')) {
     function ko_rpc($methode, $params = null, $zeit = 4)
@@ -1845,7 +2041,7 @@ if (!function_exists('ko_rpc')) {
         $vorher_zeit = ini_get('default_socket_timeout');
         @ini_set('default_socket_timeout', (string) (int) $zeit);
         set_error_handler(function () { return true; });
-        $antwort = file_get_contents($adresse, false, $ctx);
+        list($antwort, $ko_kopfzeilen) = ko_http_abruf($adresse, $ctx);
         restore_error_handler();
         @ini_set('default_socket_timeout', (string) $vorher_zeit);
 
@@ -1854,8 +2050,9 @@ if (!function_exists('ko_rpc')) {
         }
         $code = 0;
         $server = '';
-        if (isset($http_response_header) && is_array($http_response_header)) {
-            foreach ($http_response_header as $z) {
+        if (is_array($ko_kopfzeilen)) {
+            foreach ($ko_kopfzeilen as $z) {
+                if (!is_string($z)) { continue; }
                 if (preg_match('#^HTTP/\S+\s+(\d{3})#', $z, $m)) { $code = (int) $m[1]; }
                 if (preg_match('#^Server:\s*(.+)$#i', $z, $m)) { $server = trim($m[1]); }
             }
@@ -1897,14 +2094,18 @@ if (!function_exists('ko_rpc')) {
  * Was Kodi gerade tut.
  *
  * Rueckgabe: array('erreichbar' => 0|1, 'wiedergabe' => 'play|pause|stop|-',
- *                  'titel' => string, 'meldung' => string)
+ *                  'titel' => string, 'titel_ok' => bool, 'meldung' => string)
  * "-" heisst NICHT FESTSTELLBAR und ist von "stop" verschieden: stop ist eine
  * Aussage ueber Kodi, "-" eine ueber uns.
  */
 if (!function_exists('ko_kodi_zustand')) {
     function ko_kodi_zustand($zeit = 4)
     {
-        $leer = array('erreichbar' => 0, 'wiedergabe' => '-', 'titel' => '', 'meldung' => '');
+        /* titel_ok: der Titel wurde FESTGESTELLT (Befund M4, 29.09.2026) - auch
+         * ein leerer, wenn nichts laeuft. Scheitert Player.GetItem, ist titel
+         * leer und titel_ok false; der Sender schickt ihn dann fluechtig. */
+        $leer = array('erreichbar' => 0, 'wiedergabe' => '-', 'titel' => '', 'titel_ok' => false,
+                      'meldung' => '');
         list($ok, $r) = ko_rpc('JSONRPC.Ping', null, $zeit);
         if (!$ok) { $leer['meldung'] = (string) $r; return $leer; }
         $z = $leer;
@@ -1914,6 +2115,7 @@ if (!function_exists('ko_kodi_zustand')) {
         if (!$ok) { $z['meldung'] = (string) $spieler; return $z; }
         if (!is_array($spieler) || !$spieler) {
             $z['wiedergabe'] = 'stop';
+            $z['titel_ok'] = true;
             return $z;
         }
         $id = isset($spieler[0]['playerid']) ? (int) $spieler[0]['playerid'] : -1;
@@ -1940,6 +2142,7 @@ if (!function_exists('ko_kodi_zustand')) {
                 $t = $i['showtitle'] . ' - ' . $t;
             }
             $z['titel'] = $t;
+            $z['titel_ok'] = true;
         }
         return $z;
     }
@@ -2168,6 +2371,20 @@ if (!function_exists('ko_sicherung_text')) {
             // beim Zurueckspielen eine Beanstandung, und ein Schluessel, der
             // fehlt, kaeme aus der Vorgabe zurueck - genau das ist falsch,
             // wenn jemand das Feld bewusst geleert hat.
+            /* Ein gespeicherter Wert, den das Zurueckspielen abweisen wuerde
+             * (Befund U3, 29.09.2026: Altwerte bis 1.2.6 wie "kodi+1"), kommt
+             * als _hinweis in die Datei, nicht als Datenzeile - sonst wies das
+             * Plugin seine EIGENE Sicherung ab, und mit ihr Passwort, Adresse
+             * und alle uebrigen Werte. Umgeschrieben wird nichts: beim
+             * Zurueckspielen bleibt der Schluessel auf dem Wert des
+             * Zielgeraets, und die Oberflaeche nennt den Wert (ko_cfg_altwerte). */
+            if (ko_wert_zurueckspielbar($k, $w) === null) {
+                $t .= '# _hinweis ' . $k . ': der gespeicherte Wert "'
+                    . ($k === 'kodi_pass' ? '***' : addcslashes($w, "\0..\37\177"))
+                    . '" ist nicht mehr zulaessig und wurde NICHT gesichert - bitte in der '
+                    . 'Oberflaeche berichtigen.' . "\n";
+                continue;
+            }
             $t .= $k . ' ' . ($w === '' ? '-' : ko_sicherung_wert($w)) . "\n";
         }
 
@@ -2229,6 +2446,23 @@ if (!function_exists('ko_sicherung_text')) {
     }
 }
 
+/** Gespeicherte Werte, die das Zurueckspielen abweisen wuerde (Befund U3).
+ *  Rueckgabe: array(schluessel => wert). Die Oberflaeche nennt sie im Reiter
+ *  Einstellungen am Knopf "Einstellungen sichern"; die Sicherung fuehrt sie
+ *  nur als _hinweis. Geaendert wird nichts. */
+if (!function_exists('ko_cfg_altwerte')) {
+    function ko_cfg_altwerte()
+    {
+        $cfg = ko_config();
+        $l = array();
+        foreach (ko_vorgaben() as $k => $v) {
+            $w = isset($cfg[$k]) ? (string) $cfg[$k] : (string) $v;
+            if (ko_wert_zurueckspielbar($k, $w) === null) { $l[$k] = $w; }
+        }
+        return $l;
+    }
+}
+
 /** Ein Wert in der Sicherungsdatei darf keinen Leerraum enthalten - sonst
  *  zerfaellt die Zeile beim Einlesen in mehr als zwei Felder. Betroffen sind
  *  in der Praxis nur Passwoerter. Ein solcher Wert wird deshalb hexadezimal
@@ -2287,6 +2521,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
         $lizenz = array();
         $autostart = null;
         $gefunden = 0;
+        $gesehen = array();
 
         $vorgaben = ko_vorgaben();
         $addon_bekannt = ko_addon_schluessel();
@@ -2301,6 +2536,14 @@ if (!function_exists('ko_sicherung_einlesen')) {
                 continue;
             }
             $k = strtolower($f[0]);
+            /* Ein Schluessel, der zweimal dasteht, ist eine Beanstandung
+             * (Befund U5, 29.09.2026) - bis 1.2.11 gewann still der letzte.
+             * Geprueft am Rohtext, vor jeder Wertpruefung. */
+            if (isset($gesehen[$k])) {
+                $mangel[] = sprintf(ko_t('SICH.M_DOPPELT'), ko_e(substr($k, 0, 60)));
+                continue;
+            }
+            $gesehen[$k] = true;
             $w = ko_sicherung_rohwert($f[1]);
             if ($w === null) {
                 $mangel[] = sprintf(ko_t('SICH.M_WERT'), ko_e($k));
@@ -2308,7 +2551,9 @@ if (!function_exists('ko_sicherung_einlesen')) {
             }
 
             if (array_key_exists($k, $vorgaben)) {
-                $gut = ko_wert_pruefen($k, $w);
+                // Strenger als das Formular: Rand und Steuerzeichen werden
+                // abgewiesen, nicht gekuerzt (Befund U2).
+                $gut = ko_wert_zurueckspielbar($k, $w);
                 if ($gut === null) {
                     $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
                     continue;
@@ -2396,23 +2641,83 @@ if (!function_exists('ko_formkey')) {
         $fh = @fopen($tmp, 'c');
         if ($fh !== false) {
             @chmod($tmp, 0600);
-            ftruncate($fh, 0);
-            fwrite($fh, $k);
-            fflush($fh);
-            fclose($fh);
-            if (@rename($tmp, $datei)) { $abgelegt = true; }
+            /* Das Schreiben PRUEFEN (Befund K2, 29.09.2026). Bis 1.2.11 wurde
+             * auch eine leere Nebendatei umbenannt: die Seite trug ein
+             * Merkmal, das nirgends stand, das naechste Absenden wurde
+             * abgewiesen, und die Fehlerzeile unten entstand nie (in WSL
+             * gemessen mit ulimit -f 0). */
+            $ok = ftruncate($fh, 0) && fwrite($fh, $k) === strlen($k);
+            $ok = fflush($fh) && $ok;
+            $ok = fclose($fh) && $ok;
+            if ($ok && @rename($tmp, $datei)) { $abgelegt = true; }
             else { @unlink($tmp); }
         }
         /* Laesst sich das Merkmal nicht ablegen, wuerfelt JEDER Aufruf ein
          * neues - und dann scheitert hash_equals immer, jedes Formular endet
          * in "kam nicht von dieser Seite", und die Oberflaeche ist tot, ohne
-         * dass irgendwo steht warum. Das gehoert ins Protokoll. */
+         * dass irgendwo steht warum. Das gehoert ins Protokoll - gebremst,
+         * hoechstens einmal je Stunde (Regeln/03). Gesucht wird in den
+         * letzten Zeilen des Protokolls selbst: ein eigener Merker laege im
+         * Ordner, der gerade nicht beschreibbar ist. */
         if (!$abgelegt) {
-            ko_log('FEHLER: das Formularmerkmal liess sich nicht nach ' . $datei
-                 . ' schreiben. Solange das so bleibt, weist die Oberflaeche JEDES '
-                 . 'Formular ab. Rechte des Ordners pruefen.');
+            $ko_zuletzt = 0;
+            foreach (ko_log_ende(ko_paths()['log'], 50) as $ko_z) {
+                if (strpos($ko_z, 'FEHLER: das Formularmerkmal liess sich nicht') !== false
+                    && preg_match('/^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]/', $ko_z, $ko_m)) {
+                    $ko_zuletzt = (int) strtotime($ko_m[1]);
+                    break;
+                }
+            }
+            $ko_jetzt = time();
+            if ($ko_zuletzt <= 0 || ($ko_jetzt - $ko_zuletzt) >= 3600 || $ko_zuletzt > $ko_jetzt) {
+                ko_log('FEHLER: das Formularmerkmal liess sich nicht nach ' . $datei
+                     . ' schreiben. Solange das so bleibt, weist die Oberflaeche JEDES '
+                     . 'Formular ab. Rechte des Ordners pruefen.');
+            }
         }
         return $k;
+    }
+}
+
+/* ================================================================
+   Einmalmeldung nach dem POST (Befund U1, 29.09.2026)
+   ================================================================
+
+   Regeln/04: jeder POST-Handler endet mit einer Umleitung (303). Bis 1.2.11
+   antwortete jeder Handler mit 200 und der fertigen Seite; ein Neuladen ohne
+   JavaScript oder "Formular erneut senden" fuehrte Kodi starten, anhalten,
+   neu starten, Addon-Einstellungen setzen, Sender jetzt und Protokoll leeren
+   erneut aus (gemessen mit curl). Das Ergebnis eines Handlers liegt fuer den
+   folgenden GET in data/plugins/<ordner>/einmalmeldung.json, 0600, wird dort
+   gelesen UND geloescht und gilt nur 120 s. Es traegt nur Meldungstexte, nie
+   ein Kennwort - die Handler nennen das Passwort nur als ***. Bauart
+   eb_einmal_schreiben()/eb_einmal_lesen(), Einspeisebremse 0.9.28. */
+if (!function_exists('ko_einmal_schreiben')) {
+    function ko_einmal_schreiben($daten)
+    {
+        $daten['zeit'] = time();
+        return ko_json_schreiben(ko_paths()['data'] . '/einmalmeldung.json', $daten, 0600);
+    }
+}
+
+if (!function_exists('ko_einmal_lesen')) {
+    function ko_einmal_lesen()
+    {
+        $f = ko_paths()['data'] . '/einmalmeldung.json';
+        if (!is_file($f)) { return null; }
+        $d = json_decode(ko_lesen($f), true);
+        @unlink($f);
+        if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) { return null; }
+        $text = function ($s) use ($d) { return isset($d[$s]) && is_string($d[$s]) ? $d[$s] : ''; };
+        return array(
+            'saved'          => !empty($d['saved']),
+            'note'           => $text('note'),
+            'err'            => $text('err'),
+            'beanstandungen' => isset($d['beanstandungen']) && is_array($d['beanstandungen'])
+                                ? array_values(array_filter($d['beanstandungen'], 'is_string')) : array(),
+            'raw'            => $text('raw'),
+            'rawtitel'       => $text('rawtitel'),
+        );
     }
 }
 
