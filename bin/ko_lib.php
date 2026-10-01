@@ -1196,6 +1196,84 @@ if (!function_exists('ko_mqtt_port')) {
 }
 
 /**
+ * Die Abodatei fuer das MQTT-Gateway nachfuehren (KODI-c1, Verbesserungsbau
+ * 01.10.2026).
+ *
+ * Das Gateway V1 liest config/plugins/<ordner>/mqtt_subscriptions.cfg selbst
+ * und abonniert daraus (Regeln/07, am laufenden Gateway belegt an Midea2Lox
+ * 4.5.4). Mitgeliefert wird die Datei mit kodi/#; das trifft nur das
+ * Vorgabepraefix. Deshalb fuehrt das Plugin sie selbst auf <praefix>/# nach
+ * (Bauform Einspeisebremse 0.9.20): beim Speichern im Reiter MQTT, nach dem
+ * Zurueckspielen und bei jedem Lauf des Cron - der Installer kopiert bei
+ * einem Update erst die mitgelieferte kodi/#, bevor postupgrade.sh die alte
+ * Datei zurueckstellt.
+ *
+ * Geschrieben wird nur, wenn die Datei abweicht, und dann mit Protokollzeile.
+ * Nicht geschrieben wird im Archivmodus (dort laege sie im Paket) und bei
+ * einem unzulaessigen Praefix (Befund K3: das Plugin sendet dann nicht, und
+ * "kodi+1/#" waere ein Platzhalter-Abo).
+ *
+ * $schreiben = false: nur nachsehen (Oberflaeche, Reiter Test).
+ * Rueckgabe: array(stand, grund, datei)
+ *   stand  1 = traegt <praefix>/#, 0 = traegt es nicht, -1 = nicht zu sagen
+ *   grund  steht | geschrieben | fehlt | abweichend | schreibfehler | archiv | praefix
+ */
+if (!function_exists('ko_abodatei_nachfuehren')) {
+    function ko_abodatei_nachfuehren($schreiben = true)
+    {
+        $p = ko_paths();
+        $datei = $p['configdir'] . '/mqtt_subscriptions.cfg';
+        if ($p['home'] === '') { return array(-1, 'archiv', $datei); }
+        $cfg = ko_config();
+        $praefix = $cfg['mqtt_topic'] !== '' ? (string) $cfg['mqtt_topic'] : 'kodi';
+        if (ko_wert_pruefen('mqtt_topic', $praefix) !== $praefix) { return array(-1, 'praefix', $datei); }
+        $soll = $praefix . "/#\n";
+        clearstatcache(true, $datei);
+        if (is_file($datei) && ko_lesen($datei) === $soll) { return array(1, 'steht', $datei); }
+        if (!$schreiben) { return array(0, is_file($datei) ? 'abweichend' : 'fehlt', $datei); }
+
+        if (!is_dir($p['configdir'])) { @mkdir($p['configdir'], 0775, true); }
+        // Atomar und gezaehlt wie ko_json_schreiben(); das Gateway laeuft als
+        // loxberry und liest, 0644 genuegt (kein Geheimnis darin).
+        $tmp = $datei . '.tmp.' . getmypid();
+        $ok = false;
+        $fh = @fopen($tmp, 'c');
+        if ($fh !== false) {
+            @chmod($tmp, 0644);
+            $ok = ftruncate($fh, 0) && fwrite($fh, $soll) === strlen($soll);
+            $ok = fflush($fh) && $ok;
+            $ok = fclose($fh) && $ok;
+            if ($ok) {
+                clearstatcache(true, $tmp);
+                $ok = (@file_get_contents($tmp) === $soll) && @rename($tmp, $datei);
+            }
+            if (!$ok) { @unlink($tmp); }
+        }
+        if ($ok) {
+            ko_log('Abodatei ' . $datei . ' auf ' . $praefix . '/# gesetzt.');
+            return array(1, 'geschrieben', $datei);
+        }
+        /* Gebremst: der Cron ruft jede Minute (Regeln/03, hoechstens einmal
+         * je Stunde). Gesucht wird im Protokoll selbst, wie beim
+         * Formularmerkmal. */
+        $zuletzt = 0;
+        foreach (ko_log_ende($p['log'], 50) as $z) {
+            if (strpos($z, 'FEHLER: die Abodatei liess sich nicht') !== false
+                && preg_match('/^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]/', $z, $m)) {
+                $zuletzt = (int) strtotime($m[1]);
+                break;
+            }
+        }
+        $jetzt = time();
+        if ($zuletzt <= 0 || ($jetzt - $zuletzt) >= 3600 || $zuletzt > $jetzt) {
+            ko_log('FEHLER: die Abodatei liess sich nicht nach ' . $datei . ' schreiben (' . $praefix
+                 . '/#). Unter Gateway V1 ist das Abo dann von Hand einzutragen.');
+        }
+        return array(0, 'schreibfehler', $datei);
+    }
+}
+
+/**
  * Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
  *
  * Das Gateway liest ZEILENWEISE. Ein Zeilenumbruch im Wert - aus einem
@@ -2463,6 +2541,49 @@ if (!function_exists('ko_cfg_altwerte')) {
     }
 }
 
+/** X-3 (Verbesserungsbau 01.10.2026): Wuerde die EIGENE Sicherung beim
+ *  Zurueckspielen abgewiesen? Sie wird gebaut (oder als $text uebergeben)
+ *  und durch DIESELBE ko_sicherung_einlesen() geschickt wie beim
+ *  Zurueckspielen. Rueckgabe: die NAMEN der beanstandeten Schluessel, nie
+ *  Werte; leer = sie liesse sich zurueckspielen. Anders als
+ *  ko_cfg_altwerte() (Werte aus kodi.json, die die Sicherung nur als Hinweis
+ *  fuehrt) trifft das auch die Addon-Felder des Plugins und die Lizenzzeilen,
+ *  die als Datenzeilen in der Datei stehen.
+ *  Der Name traegt bewusst kein "sicherung": das Kettenwerkzeug
+ *  sicherung_pruefen.py nimmt die erste Funktion *_sicherung* als Ausfuhr. */
+if (!function_exists('ko_rueckspiel_befund')) {
+    function ko_rueckspiel_befund($text = null)
+    {
+        $t = $text === null ? ko_sicherung_text() : (string) $text;
+        $namen = array();
+        list($erg) = ko_sicherung_einlesen($t, $namen);
+        if ($erg !== null) { return array(); }
+        $l = array();
+        foreach ($namen as $n) { $l[] = preg_replace('/[^a-z0-9_.-]/', '?', strtolower((string) $n)); }
+        $l = array_values(array_unique($l));
+        return $l ? $l : array('?');
+    }
+}
+
+/** X-3, angeglichen an die uebrigen Linien (Verbesserungsbau 01.10.2026;
+ *  Entscheidung 13): bestuende ein gespeicherter Wert das Zurueckspielen
+ *  nicht, nennt der Kopf der Datei ihn - mit dem NAMEN, nie dem Wert.
+ *  Geliefert wird trotzdem vollstaendig. Die Zeile ist ein Kommentar; das
+ *  Zurueckspielen ueberliest sie. Gezaehlt werden die Werte, die die
+ *  Sicherung nur als _hinweis fuehrt (U3, ko_cfg_altwerte()), und alles,
+ *  woran die eigene Datei beim Zurueckspielen scheitern wuerde
+ *  (ko_rueckspiel_befund()). */
+if (!function_exists('ko_warnkopf_setzen')) {
+    function ko_warnkopf_setzen($txt)
+    {
+        $namen = array_values(array_unique(array_merge(array_keys(ko_cfg_altwerte()),
+            ko_rueckspiel_befund($txt))));
+        if (!$namen) { return (string) $txt; }
+        return '# _warnung ' . str_replace(array("\r", "\n"), ' ',
+            sprintf(ko_t('SICH.WARNUNG_KOPF'), implode(', ', $namen))) . "\n" . $txt;
+    }
+}
+
 /** Ein Wert in der Sicherungsdatei darf keinen Leerraum enthalten - sonst
  *  zerfaellt die Zeile beim Einlesen in mehr als zwei Felder. Betroffen sind
  *  in der Praxis nur Passwoerter. Ein solcher Wert wird deshalb hexadezimal
@@ -2513,9 +2634,12 @@ if (!function_exists('ko_sicherung_rohwert')) {
  *                  'addon' => array(), 'lizenz' => array())
  */
 if (!function_exists('ko_sicherung_einlesen')) {
-    function ko_sicherung_einlesen($roh)
+    function ko_sicherung_einlesen($roh, &$namen = null)
     {
         $mangel = array();
+        /* X-3 (Verbesserungsbau 01.10.2026): die NAMEN der beanstandeten
+         * Schluessel, nie ihre Werte - fuer ko_rueckspiel_befund(). */
+        $namen = array();
         $cfg = array();
         $addon = array();
         $lizenz = array();
@@ -2533,6 +2657,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
             $f = preg_split('/\s+/', $t);
             if (count($f) !== 2) {
                 $mangel[] = sprintf(ko_t('SICH.M_ZEILE'), ko_e(substr($t, 0, 80)));
+                $namen[] = substr(strtolower($f[0]), 0, 60);
                 continue;
             }
             $k = strtolower($f[0]);
@@ -2541,12 +2666,14 @@ if (!function_exists('ko_sicherung_einlesen')) {
              * Geprueft am Rohtext, vor jeder Wertpruefung. */
             if (isset($gesehen[$k])) {
                 $mangel[] = sprintf(ko_t('SICH.M_DOPPELT'), ko_e(substr($k, 0, 60)));
+                $namen[] = substr($k, 0, 60);
                 continue;
             }
             $gesehen[$k] = true;
             $w = ko_sicherung_rohwert($f[1]);
             if ($w === null) {
                 $mangel[] = sprintf(ko_t('SICH.M_WERT'), ko_e($k));
+                $namen[] = $k;
                 continue;
             }
 
@@ -2556,6 +2683,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
                 $gut = ko_wert_zurueckspielbar($k, $w);
                 if ($gut === null) {
                     $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
+                    $namen[] = $k;
                     continue;
                 }
                 $cfg[$k] = $gut;
@@ -2563,6 +2691,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
             } elseif ($k === 'autostart') {
                 if (!in_array($w, array('0', '1'), true)) {
                     $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
+                    $namen[] = $k;
                     continue;
                 }
                 $autostart = (int) $w;
@@ -2573,6 +2702,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
                 $gut = ko_addon_wert_pruefen($feld, $w);
                 if ($gut === null) {
                     $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
+                    $namen[] = $k;
                     continue;
                 }
                 $addon[$feld] = $gut;
@@ -2582,6 +2712,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
                 // Werte gehen ueber den Helfer in die BOOTKONFIGURATION.
                 if (!preg_match('/^[A-Za-z0-9._-]{1,32}$/', $w)) {
                     $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
+                    $namen[] = $k;
                     continue;
                 }
                 $lizenz[$k] = $w;
@@ -2591,6 +2722,7 @@ if (!function_exists('ko_sicherung_einlesen')) {
                 // Verlust - sonst schluckt dieses Plugin die Sicherung eines
                 // anderen und meldet Erfolg.
                 $mangel[] = sprintf(ko_t('SICH.M_SCHLUESSEL'), ko_e(substr($k, 0, 60)));
+                $namen[] = substr($k, 0, 60);
             }
         }
 
@@ -2709,6 +2841,34 @@ if (!function_exists('ko_einmal_lesen')) {
         @unlink($f);
         if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) { return null; }
         $text = function ($s) use ($d) { return isset($d[$s]) && is_string($d[$s]) ? $d[$s] : ''; };
+        /* X-2 (Verbesserungsbau 01.10.2026): die eingetippten Werte eines
+         * beanstandeten Formulars. Durch kommen nur die bekannten Felder des
+         * genannten Formulars - nie Passwort oder Lizenzschluessel, auch
+         * wenn sie in der Datei stuenden. */
+        $ein = null;
+        $formulare = array(
+            'settings' => array('kodi_host', 'kodi_port', 'kodi_user', 'rpc_ein', 'kodiautostart'),
+            'mqtt'     => array('mqtt_topic', 'sender_takt', 'sender_ein'),
+        );
+        $markierbar = array('kodi_host', 'kodi_port', 'kodi_user', 'kodi_pass', 'licmpeg2', 'licvc1',
+                            'mqtt_topic', 'sender_takt');
+        if (isset($d['eingaben']) && is_array($d['eingaben']) && isset($d['eingaben']['formular'])
+            && is_string($d['eingaben']['formular']) && isset($formulare[$d['eingaben']['formular']])) {
+            $form = $d['eingaben']['formular'];
+            $felder = array();
+            if (isset($d['eingaben']['felder']) && is_array($d['eingaben']['felder'])) {
+                foreach ($d['eingaben']['felder'] as $k => $v) {
+                    if (in_array((string) $k, $formulare[$form], true) && is_string($v)) { $felder[(string) $k] = $v; }
+                }
+            }
+            $falsch = array();
+            if (isset($d['eingaben']['falsch']) && is_array($d['eingaben']['falsch'])) {
+                foreach ($d['eingaben']['falsch'] as $k) {
+                    if (is_string($k) && in_array($k, $markierbar, true)) { $falsch[] = $k; }
+                }
+            }
+            $ein = array('formular' => $form, 'felder' => $felder, 'falsch' => $falsch);
+        }
         return array(
             'saved'          => !empty($d['saved']),
             'note'           => $text('note'),
@@ -2717,6 +2877,7 @@ if (!function_exists('ko_einmal_lesen')) {
                                 ? array_values(array_filter($d['beanstandungen'], 'is_string')) : array(),
             'raw'            => $text('raw'),
             'rawtitel'       => $text('rawtitel'),
+            'eingaben'       => $ein,
         );
     }
 }

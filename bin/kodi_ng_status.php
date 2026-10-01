@@ -107,6 +107,12 @@ if (in_array('--mqtt-leeren', $ko_argv, true)) {
 
 $ko_cfg = ko_config();
 
+/* DIE ABODATEI NACHFUEHREN (KODI-c1, Verbesserungsbau 01.10.2026) - VOR dem
+ * Schalter: das Kodi-Addon sendet unter dem Praefix auch bei ausgeschaltetem
+ * Statussender. Geschrieben wird nur, wenn sie abweicht (etwa nach einem
+ * Update, das zuerst die mitgelieferte kodi/# ablegt). Nicht im Trockenlauf. */
+if (!$ko_trocken) { ko_abodatei_nachfuehren(); }
+
 /* Ist der Sender ausgeschaltet, hat dieser Lauf nichts zu tun.
  *
  * Ab Werk ist er AUS. Ein Update darf einer bestehenden Anlage nicht ungefragt

@@ -110,6 +110,39 @@ function ko_ist_post()
     return isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST';
 }
 
+/** X-2: ein eingetippter Wert fuer die Einmalmeldung - hoechstens 200
+ *  Zeichen, und nur gueltiges UTF-8 (sonst scheiterte json_encode, und die
+ *  Seite kaeme ohne Umleitung). */
+function ko_eingabe_text($s)
+{
+    $s = (string) $s;
+    if (!preg_match('//u', $s)) { return ''; }
+    return preg_match('/^.{0,200}/su', $s, $m) ? $m[0] : '';
+}
+
+/** X-2: der Wert eines Formularfelds - nach einer Beanstandung der
+ *  eingetippte, sonst der gespeicherte. */
+function ko_feld($formular, $k, $gespeichert)
+{
+    global $ko_eingaben;
+    if (is_array($ko_eingaben) && $ko_eingaben['formular'] === $formular
+        && array_key_exists($k, $ko_eingaben['felder'])) {
+        return (string) $ko_eingaben['felder'][$k];
+    }
+    return (string) $gespeichert;
+}
+
+/** X-2: das beanstandete Feld markieren (rot umrandet, aria-invalid). */
+function ko_falsch($formular, $k)
+{
+    global $ko_eingaben;
+    if (is_array($ko_eingaben) && $ko_eingaben['formular'] === $formular
+        && in_array($k, $ko_eingaben['falsch'], true)) {
+        return ' class="sm-beanstandet" aria-invalid="true"';
+    }
+    return '';
+}
+
 /** Einen Schluessel ueber den Helfer setzen - und die ANTWORT lesen.
  *
  *  Bis 1.2.6 wurde sie an allen vier action=change-Stellen verworfen. Der
@@ -136,6 +169,12 @@ $ko_note = '';
 $ko_raw = '';
 $ko_rawtitel = '';
 $ko_beanstandungen = array();
+/* X-2 (Regeln/04, Verbesserungsbau 01.10.2026): die eingetippten Werte eines
+ * beanstandeten Formulars. $ko_eingaben_neu schreibt ein POST-Zweig in die
+ * Einmalmeldung, $ko_eingaben liest der folgende GET daraus. Nur nach einer
+ * Beanstandung, nur das eine Formular, nie Passwort oder Lizenzschluessel. */
+$ko_eingaben = null;
+$ko_eingaben_neu = null;
 
 /* Die Einmalmeldung des vorigen POST (Befund U1): nur beim GET, gelesen und
  * sofort geloescht - ein Neuladen zeigt sie nicht noch einmal und schickt
@@ -149,6 +188,7 @@ if (!ko_ist_post()) {
         $ko_beanstandungen = $ko_einmal['beanstandungen'];
         $ko_raw            = $ko_einmal['raw'];
         $ko_rawtitel       = $ko_einmal['rawtitel'];
+        $ko_eingaben       = $ko_einmal['eingaben'];
     }
 }
 
@@ -198,7 +238,8 @@ if (ko_ist_post() && isset($_POST['vorlage'])) {
 }
 
 if (ko_ist_post() && isset($_POST['sichern'])) {
-    $ko_txt = ko_sicherung_text();
+    // X-3: Kopfzeile _warnung mit den Namen, falls noetig (ko_warnkopf_setzen).
+    $ko_txt = ko_warnkopf_setzen(ko_sicherung_text());
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="kodi_ng_einstellungen.txt"');
     header('Content-Length: ' . strlen($ko_txt));
@@ -245,6 +286,11 @@ if (ko_ist_post()) {
                     $ko_saved = true;
                     ko_config(true);
                     $ko_meldungen[] = sprintf(ko_t('SICH.U_KONFIG'), count($ko_neu['cfg']));
+                    // KODI-c1: das Praefix kann gewechselt haben.
+                    list($ko_abo_stand, , $ko_abo_datei) = ko_abodatei_nachfuehren();
+                    if ($ko_abo_stand === 0) {
+                        $ko_meldungen[] = sprintf(ko_t('MQTT.M_ABODATEI_FEHL'), ko_e($ko_abo_datei));
+                    }
 
                     /* Autostart nachziehen - und die Antwort lesen. */
                     if ($ko_neu['autostart'] !== null) {
@@ -388,14 +434,44 @@ if (ko_ist_post()) {
     if (isset($_POST['save'])) {
         $ko_cfg = ko_config();
         $ko_mangel = array();
-        /* Beanstandungen melden, nicht das ganze Speichern verhindern: was
-         * durchgeht, wird uebernommen, und der Anwender sieht, was nicht. */
+        /* BEI EINER BEANSTANDUNG WIRD NICHTS GESPEICHERT (Entscheidung 16
+         * des Hausherrn, 30.09.2026; Verbesserungsbau 01.10.2026). Bis 1.2.13
+         * wurde ein falsches Feld uebersprungen und der Rest gespeichert, und
+         * Lizenzschluessel und Autostart gingen sofort ueber den Helfer -
+         * auch wenn daneben ein Feld beanstandet war (Bestandsmessung B,
+         * 01.10.2026). Jetzt wird erst ALLES geprueft; geschrieben wird nur
+         * ohne Beanstandung, und erst danach wird der Helfer gerufen.
+         *
+         * X-2 (Regeln/04): die eingetippten Werte reisen mit der
+         * Einmalmeldung zurueck ins Formular - nur die dieses Formulars, nie
+         * das Passwort und nie die Lizenzschluessel. */
+        $ko_falsch = array();
+        $ko_felder = array();
         foreach (array('kodi_host', 'kodi_port', 'kodi_user') as $ko_k) {
-            if (!isset($_POST[$ko_k]) || !is_string($_POST[$ko_k])) { continue; }
+            if (!isset($_POST[$ko_k])) { continue; }
+            if (!is_string($_POST[$ko_k])) {
+                // Ein Feld statt einer Zeichenkette (kodi_host[]=x): bis 1.2.13
+                // still uebergangen - der Rest wurde gespeichert.
+                $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_k), '');
+                $ko_falsch[] = $ko_k;
+                continue;
+            }
+            $ko_felder[$ko_k] = ko_eingabe_text($_POST[$ko_k]);
             $ko_v = ko_wert_pruefen($ko_k, $_POST[$ko_k]);
             if ($ko_v === null) {
                 $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_k),
                     ko_e(substr((string) $_POST[$ko_k], 0, 40)));
+                $ko_falsch[] = $ko_k;
+                continue;
+            }
+            /* STILLES ZURECHTBIEGEN IST EINE BEANSTANDUNG (Entscheidung 19,
+             * 01.10.2026): "08080" wurde still zu "8080", "::1" zu "[::1]".
+             * Still bleibt nur das Abschneiden von Leerraum am Rand. */
+            $ko_soll = $ko_k === 'kodi_user' ? (string) $_POST[$ko_k] : trim((string) $_POST[$ko_k]);
+            if ($ko_v !== $ko_soll) {
+                $ko_mangel[] = sprintf(ko_t('MELDUNG.ZURECHTGEBOGEN'), ko_e($ko_k),
+                    ko_e(substr($ko_soll, 0, 40)), ko_e($ko_v));
+                $ko_falsch[] = $ko_k;
                 continue;
             }
             $ko_cfg[$ko_k] = $ko_v;
@@ -405,14 +481,16 @@ if (ko_ist_post()) {
          * Der Browser fuellt type=password nicht vor - und seit 1.2.7 steht
          * das gespeicherte Passwort auch nicht mehr im Quelltext der Seite.
          * Bis 1.2.6 hiess "nur den Benutzernamen aendern und speichern":
-         * Passwort geloescht. Geloescht wird jetzt ueber den Haken daneben. */
+         * Passwort geloescht. Geloescht wird jetzt ueber den Haken daneben.
+         * Es reist nie in die Einmalmeldung (X-2). */
         if (!empty($_POST['kodi_pass_loeschen'])) {
             $ko_cfg['kodi_pass'] = '';
-        } elseif (isset($_POST['kodi_pass']) && is_string($_POST['kodi_pass'])
-                  && $_POST['kodi_pass'] !== '') {
-            $ko_v = ko_wert_pruefen('kodi_pass', $_POST['kodi_pass']);
+        } elseif (isset($_POST['kodi_pass'])
+                  && (!is_string($_POST['kodi_pass']) || $_POST['kodi_pass'] !== '')) {
+            $ko_v = is_string($_POST['kodi_pass']) ? ko_wert_pruefen('kodi_pass', $_POST['kodi_pass']) : null;
             if ($ko_v === null || $ko_v === '') {
                 $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), 'kodi_pass', '***');
+                $ko_falsch[] = 'kodi_pass';
             } else {
                 $ko_cfg['kodi_pass'] = $ko_v;
             }
@@ -425,39 +503,73 @@ if (ko_ist_post()) {
         foreach (array('rpc_ein') as $ko_k) {
             if (empty($_POST['hat_' . $ko_k])) { continue; }
             $ko_cfg[$ko_k] = empty($_POST[$ko_k]) ? '0' : '1';
+            $ko_felder[$ko_k] = $ko_cfg[$ko_k];
         }
 
-        /* Lizenzschluessel: ein leeres Feld loescht nichts. */
+        /* Lizenzschluessel: ein leeres Feld loescht nichts. Hier wird nur
+         * GEPRUEFT; an den Helfer gehen sie erst nach dem Speichern. */
         $ko_st = ko_status();
+        $ko_lizenz = array();
         foreach (array('licmpeg2' => 'mpeg2lic', 'licvc1' => 'vc1lic') as $ko_key => $ko_feld) {
-            if (!isset($_POST[$ko_key]) || !is_string($_POST[$ko_key])) { continue; }
+            if (!isset($_POST[$ko_key])) { continue; }
+            if (!is_string($_POST[$ko_key])) {
+                $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_key), '');
+                $ko_falsch[] = $ko_key;
+                continue;
+            }
             $ko_lneu = trim((string) $_POST[$ko_key]);
             if ($ko_lneu === '') { continue; }
             if ($ko_lneu === (string) (isset($ko_st[$ko_feld]) ? $ko_st[$ko_feld] : '')) { continue; }
             if (!preg_match('/^[A-Za-z0-9._-]{1,32}$/', $ko_lneu)) {
                 $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_key), ko_e(substr($ko_lneu, 0, 40)));
+                $ko_falsch[] = $ko_key;
                 continue;
             }
-            $ko_grund = ko_helfer_setzen($ko_key, $ko_lneu);
-            if ($ko_grund === '') {
-                ko_log('Lizenzschluessel ' . $ko_key . ' gesetzt.');
-            } else {
-                $ko_mangel[] = sprintf(ko_t('MELDUNG.HELFER_ABGELEHNT'), ko_e($ko_key), ko_e($ko_grund));
-                ko_log('Lizenzschluessel ' . $ko_key . ' NICHT gesetzt: ' . $ko_grund);
-            }
+            $ko_lizenz[$ko_key] = $ko_lneu;
         }
-
+        $ko_soll_auto = null;
         if (isset($_POST['hat_kodiautostart'])) {
             $ko_soll_auto = empty($_POST['kodiautostart']) ? '0' : '1';
-            // Nur schalten, wenn sich etwas aendert - und die Antwort lesen.
-            $ko_ist_auto = ko_status();
-            if (!isset($ko_ist_auto['kodiautostart'])
-                || (string) (int) $ko_ist_auto['kodiautostart'] !== $ko_soll_auto) {
-                $ko_grund = ko_helfer_setzen('kodiautostart', $ko_soll_auto);
-                if ($ko_grund !== '') {
-                    $ko_mangel[] = sprintf(ko_t('MELDUNG.HELFER_ABGELEHNT'), 'kodiautostart', ko_e($ko_grund));
+            $ko_felder['kodiautostart'] = $ko_soll_auto;
+        }
+
+        if ($ko_mangel) {
+            $ko_beanstandungen = $ko_mangel;
+            $ko_eingaben_neu = array('formular' => 'settings', 'felder' => $ko_felder,
+                                     'falsch' => array_values(array_unique($ko_falsch)));
+            ko_log('Einstellungen NICHT gespeichert (' . count($ko_mangel) . ' Beanstandung(en): '
+                 . implode(', ', array_unique($ko_falsch)) . '); der Helfer wurde nicht gerufen.');
+        } elseif (!ko_config_schreiben($ko_cfg)) {
+            $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']))
+                . ' ' . ko_t('MELDUNG.HELFER_NICHT_GERUFEN');
+        } else {
+            $ko_saved = true;
+            ko_config(true);
+            ko_log('Konfiguration gespeichert.');
+            /* Erst jetzt der Helfer - und seine Antwort lesen. Scheitert er,
+             * steht das als Fehler da; die Einstellungen sind gespeichert. */
+            $ko_helfer_fehl = array();
+            foreach ($ko_lizenz as $ko_key => $ko_lneu) {
+                $ko_grund = ko_helfer_setzen($ko_key, $ko_lneu);
+                if ($ko_grund === '') {
+                    ko_log('Lizenzschluessel ' . $ko_key . ' gesetzt.');
+                } else {
+                    $ko_helfer_fehl[] = sprintf(ko_t('MELDUNG.HELFER_ABGELEHNT'), ko_e($ko_key), ko_e($ko_grund));
+                    ko_log('Lizenzschluessel ' . $ko_key . ' NICHT gesetzt: ' . $ko_grund);
                 }
             }
+            if ($ko_soll_auto !== null) {
+                // Nur schalten, wenn sich etwas aendert - und die Antwort lesen.
+                $ko_ist_auto = ko_status();
+                if (!isset($ko_ist_auto['kodiautostart'])
+                    || (string) (int) $ko_ist_auto['kodiautostart'] !== $ko_soll_auto) {
+                    $ko_grund = ko_helfer_setzen('kodiautostart', $ko_soll_auto);
+                    if ($ko_grund !== '') {
+                        $ko_helfer_fehl[] = sprintf(ko_t('MELDUNG.HELFER_ABGELEHNT'), 'kodiautostart', ko_e($ko_grund));
+                    }
+                }
+            }
+            if ($ko_helfer_fehl) { $ko_err = implode(' ', $ko_helfer_fehl); }
         }
 
         /* DEN ZUSTAND FRISCH HOLEN.
@@ -470,15 +582,6 @@ if (ko_ist_post()) {
          * geschaltet hatte. Der Anwender hakt dann erneut an und schaltet
          * damit wieder zurueck. */
         ko_status(true);
-
-        if (ko_config_schreiben($ko_cfg)) {
-            $ko_saved = true;
-            ko_config(true);
-            ko_log('Konfiguration gespeichert.');
-        } else {
-            $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
-        }
-        if ($ko_mangel) { $ko_beanstandungen = $ko_mangel; }
     }
 
     /* ============ MQTT speichern ============ */
@@ -486,30 +589,56 @@ if (ko_ist_post()) {
         /* Seit 1.2.7 fuehrt dieses Formular ALLE MQTT-Einstellungen: Thema,
          * Statussender und seinen Takt (Regeln/04, "MQTT wohnt vollstaendig
          * im Reiter MQTT"). Bis 1.2.6 standen Sender und Takt im Reiter
-         * Einstellungen. Beanstandungen melden, nicht alles verhindern: was
-         * durchgeht, wird uebernommen. */
+         * Einstellungen. Bei einer Beanstandung wird NICHTS gespeichert und
+         * nichts abgeraeumt (Entscheidung 16, Verbesserungsbau 01.10.2026 -
+         * bis 1.2.13 wurde uebernommen, was durchging); die eingetippten
+         * Werte stehen danach wieder im Formular (X-2). */
         $ko_cfg = ko_config();
         $ko_mangel = array();
+        $ko_falsch = array();
+        $ko_felder = array();
         // Der Stand VOR dem Speichern - fuer das Abraeumen unten (M2, M3).
         $ko_praefix_vorher = $ko_cfg['mqtt_topic'] !== '' ? (string) $ko_cfg['mqtt_topic'] : 'kodi';
         $ko_sender_vorher = (string) $ko_cfg['sender_ein'];
         foreach (array('mqtt_topic', 'sender_takt') as $ko_k) {
             if (!isset($_POST[$ko_k])) { continue; }
+            if (is_string($_POST[$ko_k])) { $ko_felder[$ko_k] = ko_eingabe_text($_POST[$ko_k]); }
             $ko_v = is_string($_POST[$ko_k]) ? ko_wert_pruefen($ko_k, $_POST[$ko_k]) : null;
             if ($ko_v === null) {
                 $ko_gezeigt = is_string($_POST[$ko_k]) ? substr($_POST[$ko_k], 0, 40) : '';
                 $ko_mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($ko_k), ko_e($ko_gezeigt));
+                $ko_falsch[] = $ko_k;
+                continue;
+            }
+            // Entscheidung 19: "0300" wurde still zu "300" - jetzt beanstandet.
+            if ($ko_v !== trim((string) $_POST[$ko_k])) {
+                $ko_mangel[] = sprintf(ko_t('MELDUNG.ZURECHTGEBOGEN'), ko_e($ko_k),
+                    ko_e(substr(trim((string) $_POST[$ko_k]), 0, 40)), ko_e($ko_v));
+                $ko_falsch[] = $ko_k;
                 continue;
             }
             $ko_cfg[$ko_k] = $ko_v;
         }
         if (!empty($_POST['hat_sender_ein'])) {
             $ko_cfg['sender_ein'] = empty($_POST['sender_ein']) ? '0' : '1';
+            $ko_felder['sender_ein'] = $ko_cfg['sender_ein'];
         }
-        if (ko_config_schreiben($ko_cfg)) {
+        if ($ko_mangel) {
+            $ko_beanstandungen = $ko_mangel;
+            $ko_eingaben_neu = array('formular' => 'mqtt', 'felder' => $ko_felder,
+                                     'falsch' => array_values(array_unique($ko_falsch)));
+            ko_log('MQTT-Einstellungen NICHT gespeichert (' . count($ko_mangel) . ' Beanstandung(en): '
+                 . implode(', ', array_unique($ko_falsch)) . ').');
+        } elseif (ko_config_schreiben($ko_cfg)) {
             $ko_saved = true;
             ko_config(true);
             ko_log('MQTT-Einstellungen gespeichert (Statussender ' . $ko_cfg['sender_ein'] . ').');
+            /* KODI-c1: die Abodatei folgt dem Praefix sofort, nicht erst beim
+             * naechsten Cron-Lauf. */
+            list($ko_abo_stand, , $ko_abo_datei) = ko_abodatei_nachfuehren();
+            if ($ko_abo_stand === 0) {
+                $ko_err = sprintf(ko_t('MQTT.M_ABODATEI_FEHL'), ko_e($ko_abo_datei));
+            }
             /* ZURUECKBEHALTENE THEMEN ABRAEUMEN (Befunde M2, M3, 29.09.2026).
              * Wer den Statussender ausschaltet, will keine Themen im Broker
              * haben; bis 1.2.11 blieben dienst, autostart, wiedergabe und titel
@@ -542,7 +671,6 @@ if (ko_ist_post()) {
         } else {
             $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
         }
-        if ($ko_mangel) { $ko_beanstandungen = $ko_mangel; }
         $ko_tab = 'tab-mqtt';
     }
 
@@ -615,6 +743,61 @@ if (ko_ist_post()) {
                     $ko_note = sprintf(ko_t('ADDON.M_OK'), count($ko_soll))
                         . ($ko_lief && $ko_start_gelungen ? ' ' . ko_t('ADDON.M_NEUGESTARTET') : '');
                     ko_log('Addon-Einstellungen gesetzt (' . count($ko_soll) . ' Felder).');
+                }
+                if (!$ko_start_gelungen) {
+                    $ko_start_fehl = sprintf(ko_t('ADDON.M_START_FEHL'), '<b>' . ko_e($ko_start_text) . '</b>');
+                    $ko_err = $ko_err !== '' ? $ko_err . ' ' . $ko_start_fehl : $ko_start_fehl;
+                }
+            }
+        }
+    }
+
+    /* ============ Nur das Thema im Addon angleichen (KODI-b1) ============
+     * Verbesserungsbau 01.10.2026. Nach einem Praefixwechsel sendete das
+     * Addon weiter unter dem alten Thema; bis 1.2.13 sagte die Meldung nur,
+     * dass es nicht von selbst folgt. Geschrieben wird allein a_mqtt_topic -
+     * addonwrite laesst alle anderen Felder stehen. Sperre, Nachmessung und
+     * Startnachweis wie beim Knopf "Addon-Einstellungen setzen". */
+    if (isset($_POST['addonthema'])) {
+        $ko_tab = 'tab-mqtt';
+        $ko_cfg_t = ko_config();
+        $ko_thema = $ko_cfg_t['mqtt_topic'] !== '' ? (string) $ko_cfg_t['mqtt_topic'] : 'kodi';
+        if (ko_wert_pruefen('mqtt_topic', $ko_thema) !== $ko_thema) {
+            $ko_err = sprintf(ko_t('ADDON.M_THEMA_PRAEFIX'),
+                '<span class="sm-mono">' . ko_e(addcslashes($ko_thema, "\0..\37\177")) . '</span>');
+        } else {
+            $ko_st = ko_status(true);
+            $ko_lief = !empty($ko_st['kodistarted']);
+            $ko_anhalten = !empty($_POST['addon_anhalten']);
+            if ($ko_lief && !$ko_anhalten) {
+                $ko_err = ko_t('ADDON.M_LAEUFT');
+            } else {
+                if ($ko_lief) { ko_helper('action=service key=kodi value=stop'); }
+                $ko_a = ko_helper_json('action=addonwrite '
+                    . escapeshellarg('a_mqtt_topic=' . rawurlencode($ko_thema)));
+                $ko_ok = is_array($ko_a) && isset($ko_a['status']) && $ko_a['status'] === 'OK';
+                // Die WIRKUNG messen, am Zwischenspeicher vorbei.
+                $ko_ist = ko_addon_lesen(true);
+                $ko_start_gelungen = true;
+                $ko_start_text = '';
+                if ($ko_lief) {
+                    ko_helper('action=service key=kodi value=start');
+                    sleep(3);
+                    $ko_st_neu = ko_status(true);
+                    $ko_start_gelungen = !empty($ko_st_neu['kodistarted']);
+                    $ko_start_text = ko_dienst_text($ko_st_neu, ko_dienst_lage(true));
+                }
+                if (!$ko_ok) {
+                    $ko_err = sprintf(ko_t('ADDON.M_FEHL'),
+                        ko_e(is_array($ko_a) && isset($ko_a['reason']) ? $ko_a['reason'] : '?'));
+                } elseif (!is_array($ko_ist)) {
+                    $ko_note = ko_t('ADDON.M_GESCHRIEBEN_UNGEPRUEFT');
+                } elseif (!isset($ko_ist['mqtt_topic']) || (string) $ko_ist['mqtt_topic'] !== $ko_thema) {
+                    $ko_err = sprintf(ko_t('ADDON.M_NACHGEMESSEN_ABWEICHUNG'), 'mqtt_topic');
+                } else {
+                    $ko_note = sprintf(ko_t('ADDON.M_THEMA_OK'), '<span class="sm-mono">' . ko_e($ko_thema) . '</span>')
+                        . ($ko_lief && $ko_start_gelungen ? ' ' . ko_t('ADDON.M_NEUGESTARTET') : '');
+                    ko_log('Addon-Thema auf ' . $ko_thema . ' angeglichen.');
                 }
                 if (!$ko_start_gelungen) {
                     $ko_start_fehl = sprintf(ko_t('ADDON.M_START_FEHL'), '<b>' . ko_e($ko_start_text) . '</b>');
@@ -707,6 +890,7 @@ if (ko_ist_post()) {
     if (ko_einmal_schreiben(array(
             'saved' => $ko_saved, 'note' => $ko_note, 'err' => $ko_err,
             'beanstandungen' => array_values($ko_beanstandungen),
+            'eingaben' => $ko_eingaben_neu,
             'raw' => $ko_raw, 'rawtitel' => $ko_rawtitel))) {
         header('Location: index.php?form=' . substr($ko_tab, 4), true, 303);
         exit;
@@ -723,6 +907,13 @@ $ko_st   = ko_status();
 $ko_gw   = ko_mqtt_gateway_info();
 $ko_gwf  = ($ko_gw === null) ? 0 : (int) $ko_gw['fassung'];
 $ko_port = ko_mqtt_port();
+/* KODI-c1: traegt die Abodatei das Abo? Nur nachsehen - geschrieben wird beim
+ * Speichern, nach dem Zurueckspielen und im Cron. */
+$ko_abo = ko_abodatei_nachfuehren(false);
+$ko_abo_satz = sprintf(ko_t('MQTT.ABO_DATEI_JA'),
+    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic'] !== '' ? $ko_cfg['mqtt_topic'] : 'kodi') . '/#</span>',
+    '<span class="sm-mono">' . ko_e($ko_abo[2]) . '</span>');
+$ko_abo_nein = sprintf(ko_t('MQTT.ABO_DATEI_NEIN'), '<span class="sm-mono">' . ko_e($ko_abo[2]) . '</span>');
 $ko_p    = ko_paths();
 
 $ko_frame = class_exists('LBWeb', false);
@@ -832,6 +1023,8 @@ $ko_weburl = ko_kodi_url();
     width: 100%; max-width: 520px; padding: 8px 10px; border: 1px solid #ccc;
     border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
 .sm-feld input[type=checkbox] { width: 17px; height: 17px; margin: 0 6px 0 0; vertical-align: middle; }
+/* X-2: das beanstandete Feld nach der Umleitung (Regeln/04). */
+.sm-feld input.sm-beanstandet { border: 2px solid #b00000; background: #fff6f6; }
 /* Eine Tabelle, die breiter ist als das Fenster, braucht ihre eigene
    Bildlaufleiste - sonst steht die letzte Spalte ausserhalb und ist
    UNERREICHBAR, nicht bloss unbequem. */
@@ -867,7 +1060,9 @@ $ko_weburl = ko_kodi_url();
 <div class="sm-warnung"><b><?= ko_t('MELDUNG.BEANSTANDET') ?></b>
 <ul style="margin:6px 0 0 18px;">
 <?php foreach ($ko_beanstandungen as $ko_b) { ?><li><?= $ko_b ?></li><?php } ?>
-</ul></div>
+</ul>
+<?php if (is_array($ko_eingaben)) { ?><div class="sm-hilfe"><?= ko_t('MELDUNG.NICHTS_GESPEICHERT') ?></div><?php } ?>
+</div>
 <?php } ?>
 
 <div class="sm-kacheln">
@@ -965,12 +1160,12 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 <h2>Kodi</h2>
 <div class="sm-feld">
     <label for="ko_host"><?= ko_e(ko_t('EINST.L_HOST')) ?></label>
-    <input data-role="none" type="text" id="ko_host" name="kodi_host" value="<?= ko_e($ko_cfg['kodi_host']) ?>">
+    <input data-role="none" type="text" id="ko_host" name="kodi_host" value="<?= ko_e(ko_feld('settings', 'kodi_host', $ko_cfg['kodi_host'])) ?>"<?= ko_falsch('settings', 'kodi_host') ?>>
     <div class="sm-hilfe"><?= sprintf(ko_t('EINST.H_HOST'), '<span class="sm-mono">127.0.0.1</span>') ?></div>
 </div>
 <div class="sm-feld">
     <label for="ko_portfeld"><?= ko_e(ko_t('EINST.L_PORT')) ?></label>
-    <input data-role="none" type="number" id="ko_portfeld" name="kodi_port" value="<?= (int) $ko_cfg['kodi_port'] ?>">
+    <input data-role="none" type="number" id="ko_portfeld" name="kodi_port" value="<?= ko_e(ko_feld('settings', 'kodi_port', (int) $ko_cfg['kodi_port'])) ?>"<?= ko_falsch('settings', 'kodi_port') ?>>
     <div class="sm-hilfe"><?= ko_t('EINST.H_PORT') ?></div>
 </div>
 <?php if ($ko_weburl !== '') { ?>
@@ -983,14 +1178,14 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 <?php } ?>
 <div class="sm-feld">
     <label for="ko_user"><?= ko_e(ko_t('EINST.L_USER')) ?></label>
-    <input data-role="none" type="text" id="ko_user" name="kodi_user" value="<?= ko_e($ko_cfg['kodi_user']) ?>">
+    <input data-role="none" type="text" id="ko_user" name="kodi_user" value="<?= ko_e(ko_feld('settings', 'kodi_user', $ko_cfg['kodi_user'])) ?>"<?= ko_falsch('settings', 'kodi_user') ?>>
 </div>
 <div class="sm-feld">
     <label for="ko_pass"><?= ko_e(ko_t('EINST.L_PASS')) ?></label>
     <!-- Das gespeicherte Passwort steht NICHT im Quelltext der Seite (bis
          1.2.6 stand es dort als value=). Ein leeres Feld laesst es stehen;
          geloescht wird ueber den Haken darunter. -->
-    <input data-role="none" type="password" id="ko_pass" name="kodi_pass" value="" autocomplete="new-password"
+    <input data-role="none" type="password" id="ko_pass" name="kodi_pass" value="" autocomplete="new-password"<?= ko_falsch('settings', 'kodi_pass') ?>
         placeholder="<?= ko_e($ko_cfg['kodi_pass'] !== ''
             ? ko_t('EINST.PASS_GESETZT') : ko_t('EINST.PASS_LEER')) ?>">
     <?php if ($ko_cfg['kodi_pass'] !== '') { ?>
@@ -1011,7 +1206,7 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
     <input data-role="none" type="hidden" name="hat_kodiautostart" value="1">
     <?php } ?>
     <label><input data-role="none" type="checkbox" name="kodiautostart" value="1"
-        <?= (!empty($ko_st['kodiautostart'])) ? 'checked' : '' ?>>
+        <?= ko_feld('settings', 'kodiautostart', !empty($ko_st['kodiautostart']) ? '1' : '0') === '1' ? 'checked' : '' ?>>
         <?= ko_e(ko_t('EINST.L_AUTOSTART')) ?></label>
 </div>
 
@@ -1019,7 +1214,7 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 <div class="sm-feld">
     <input data-role="none" type="hidden" name="hat_rpc_ein" value="1">
     <label><input data-role="none" type="checkbox" name="rpc_ein" value="1"
-        <?= ((string) $ko_cfg['rpc_ein'] === '1') ? 'checked' : '' ?>>
+        <?= ko_feld('settings', 'rpc_ein', $ko_cfg['rpc_ein']) === '1' ? 'checked' : '' ?>>
         <?= ko_e(ko_t('EINST.L_RPC')) ?></label>
     <div class="sm-hilfe"><?= ko_t('EINST.H_RPC') ?></div>
 </div>
@@ -1031,13 +1226,13 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
     <label for="ko_mpeg2">MPEG2 &mdash; <?= ko_e(ko_t('EINST.HINTERLEGT')) ?>
         <span class="sm-mono"><?= ko_e(isset($ko_st['mpeg2lic']) && $ko_st['mpeg2lic'] !== ''
             ? $ko_st['mpeg2lic'] : ko_t('EINST.KEINER')) ?></span></label>
-    <input data-role="none" type="text" id="ko_mpeg2" name="licmpeg2" value="" placeholder="0x00000000">
+    <input data-role="none" type="text" id="ko_mpeg2" name="licmpeg2" value="" placeholder="0x00000000"<?= ko_falsch('settings', 'licmpeg2') ?>>
 </div>
 <div class="sm-feld">
     <label for="ko_vc1">VC1 &mdash; <?= ko_e(ko_t('EINST.HINTERLEGT')) ?>
         <span class="sm-mono"><?= ko_e(isset($ko_st['vc1lic']) && $ko_st['vc1lic'] !== ''
             ? $ko_st['vc1lic'] : ko_t('EINST.KEINER')) ?></span></label>
-    <input data-role="none" type="text" id="ko_vc1" name="licvc1" value="" placeholder="0x00000000">
+    <input data-role="none" type="text" id="ko_vc1" name="licvc1" value="" placeholder="0x00000000"<?= ko_falsch('settings', 'licvc1') ?>>
 </div>
 
 <div class="sm-knopfreihe">
@@ -1061,6 +1256,15 @@ if ($ko_altwerte) {
     }
     ?>
 <div class="sm-warnung"><?= sprintf(ko_t('SICH.ALTWERT'), implode(', ', $ko_aw)) ?></div>
+<?php } ?>
+<?php
+/* X-3 (Verbesserungsbau 01.10.2026): wuerde die EIGENE Sicherung beim
+ * Zurueckspielen abgewiesen (etwa wegen eines Addon-Felds des Plugins),
+ * steht es hier - mit den Namen, nie den Werten. Dieselbe Pruefung wie beim
+ * Zurueckspielen (ko_rueckspiel_befund). */
+$ko_rsb = ko_rueckspiel_befund();
+if ($ko_rsb) { ?>
+<div class="sm-warnung"><?= sprintf(ko_t('SICH.RUECKSPIEL_ABGEWIESEN'), ko_e(implode(', ', $ko_rsb))) ?></div>
 <?php } ?>
 <!-- ZWEI GETRENNTE FORMULARE. Das Sichern schickt einen Download und ruft exit
      auf; das Zurueckspielen braucht enctype="multipart/form-data". Wer beides
@@ -1120,7 +1324,7 @@ if ($ko_gw === null) { ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <div class="sm-feld">
     <label for="ko_thema"><?= ko_e(ko_t('MQTT.L_THEMA')) ?></label>
-    <input data-role="none" type="text" id="ko_thema" name="mqtt_topic" value="<?= ko_e($ko_cfg['mqtt_topic']) ?>">
+    <input data-role="none" type="text" id="ko_thema" name="mqtt_topic" value="<?= ko_e(ko_feld('mqtt', 'mqtt_topic', $ko_cfg['mqtt_topic'])) ?>"<?= ko_falsch('mqtt', 'mqtt_topic') ?>>
     <div class="sm-hilfe"><?= sprintf(ko_t('MQTT.H_THEMA'),
         '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/dienst</span>') ?></div>
 </div>
@@ -1130,12 +1334,12 @@ if ($ko_gw === null) { ?>
 <div class="sm-feld">
     <input data-role="none" type="hidden" name="hat_sender_ein" value="1">
     <label><input data-role="none" type="checkbox" name="sender_ein" value="1"
-        <?= ((string) $ko_cfg['sender_ein'] === '1') ? 'checked' : '' ?>>
+        <?= ko_feld('mqtt', 'sender_ein', $ko_cfg['sender_ein']) === '1' ? 'checked' : '' ?>>
         <?= ko_e(ko_t('EINST.L_SENDER')) ?></label>
 </div>
 <div class="sm-feld">
     <label for="ko_takt"><?= ko_e(ko_t('EINST.L_TAKT')) ?></label>
-    <input data-role="none" type="number" id="ko_takt" name="sender_takt" value="<?= (int) $ko_cfg['sender_takt'] ?>">
+    <input data-role="none" type="number" id="ko_takt" name="sender_takt" value="<?= ko_e(ko_feld('mqtt', 'sender_takt', (int) $ko_cfg['sender_takt'])) ?>"<?= ko_falsch('mqtt', 'sender_takt') ?>>
     <div class="sm-hilfe"><?= ko_t('EINST.H_TAKT') ?></div>
 </div>
 <div class="sm-knopfreihe">
@@ -1146,10 +1350,13 @@ if ($ko_gw === null) { ?>
 <h2><?= ko_e(ko_t('MQTT.H_ABO')) ?></h2>
 <?php if ($ko_gwf >= 2) { ?>
 <div class="sm-hinweis"><?= ko_t('LOX.ABO_V2') ?></div>
+<?php } elseif ($ko_abo[0] === 1) { ?>
+<div class="sm-hinweis"><?= $ko_abo_satz ?></div>
 <?php } else { ?>
 <div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
     <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
 <div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
+<?php if ($ko_abo[0] === 0) { ?><div class="sm-hilfe"><?= $ko_abo_nein ?></div><?php } ?>
 <?php if ($ko_gwf === 0) { ?><div class="sm-hilfe"><?= ko_t('LOX.ABO_V2') ?></div><?php } ?>
 <?php } ?>
 
@@ -1197,6 +1404,19 @@ $ko_soll  = ko_addon_soll();
 <?php if ($ko_addon === null) { ?>
 <div class="sm-warnung"><?= ko_t('ADDON.NICHT_LESBAR') ?></div>
 <?php } ?>
+<?php
+/* KODI-b1: weicht das Thema im Addon vom Praefix ab, steht es hier - und der
+ * Knopf "Addon-Thema angleichen" erscheint im Formular darunter. Ohne lesbare
+ * Addon-Einstellungen oder bei unzulaessigem Praefix gibt es ihn nicht. */
+$ko_thema_soll = isset($ko_soll['mqtt_topic']) ? (string) $ko_soll['mqtt_topic'] : '';
+$ko_thema_ab = $ko_addon !== null && $ko_thema_soll !== ''
+    && ko_wert_pruefen('mqtt_topic', $ko_thema_soll) === $ko_thema_soll
+    && (!isset($ko_addon['mqtt_topic']) || (string) $ko_addon['mqtt_topic'] !== $ko_thema_soll);
+if ($ko_thema_ab) { ?>
+<div class="sm-warnung"><?= sprintf(ko_t('ADDON.THEMA_ABWEICHUNG'),
+    '<span class="sm-mono">' . ko_e(isset($ko_addon['mqtt_topic']) && $ko_addon['mqtt_topic'] !== '' ? $ko_addon['mqtt_topic'] : '-') . '</span>',
+    '<span class="sm-mono">' . ko_e($ko_thema_soll) . '</span>') ?></div>
+<?php } ?>
 <form action="index.php" method="post">
 <?= ko_fmt() ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
@@ -1207,6 +1427,9 @@ $ko_soll  = ko_addon_soll();
 </div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="addonschreiben" value="1"><?= ko_e(ko_t('ADDON.K_SETZEN')) ?></button>
+<?php if ($ko_thema_ab) { ?>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="addonthema" value="1"><?= ko_e(ko_t('ADDON.K_THEMA')) ?></button>
+<?php } ?>
 </div>
 </form>
 </div>
@@ -1258,14 +1481,24 @@ if ($ko_gwf >= 2) { ?>
 <div class="sm-hinweis"><?= ko_t('LOX.ABO_V2') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V2') ?></div>
 <?php } elseif ($ko_gwf === 1) { ?>
-<div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
-    <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
-<div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
-<div class="sm-step"><?= ko_t('LOX.SCHRITT3_V1') ?></div>
+<?php if ($ko_abo[0] === 1) { ?>
+<div class="sm-hinweis"><?= $ko_abo_satz ?></div>
 <?php } else { ?>
 <div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
     <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
 <div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
+<?php if ($ko_abo[0] === 0) { ?><div class="sm-hilfe"><?= $ko_abo_nein ?></div><?php } ?>
+<?php } ?>
+<div class="sm-step"><?= ko_t('LOX.SCHRITT3_V1') ?></div>
+<?php } else { ?>
+<?php if ($ko_abo[0] === 1) { ?>
+<div class="sm-hinweis"><?= $ko_abo_satz ?></div>
+<?php } else { ?>
+<div class="sm-step"><?= ko_e(ko_t('MQTT.ABO_KOPIEREN')) ?>
+    <span class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic']) ?>/#</span></div>
+<div class="sm-warnung"><?= ko_t('LOX.ABO_PFLICHT') ?></div>
+<?php if ($ko_abo[0] === 0) { ?><div class="sm-hilfe"><?= $ko_abo_nein ?></div><?php } ?>
+<?php } ?>
 <div class="sm-hilfe"><?= ko_t('LOX.ABO_V2') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V1') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V2') ?></div>

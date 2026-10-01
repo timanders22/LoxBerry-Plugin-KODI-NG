@@ -130,6 +130,8 @@ fi
 # Ohne Marke werden beide nach <name>.alt verschoben - die Bibliothek
 # (ko_config) liest .alt nie - und EINMAL gemeldet; die Deinstallation raeumt
 # .alt mit ab. Bei einer Aktualisierung bleiben sie, wo sie sind.
+# Seit dem Verbesserungsbau 01.10.2026 (X-1) tut das schon preinstall.sh, VOR
+# der Cron-Datei; dieser Block ist der Rueckfall und findet dann nichts mehr.
 KO_GEMELDET=0
 ko_beiseite_melden() {
     if [ "$KO_GEMELDET" != "1" ]; then

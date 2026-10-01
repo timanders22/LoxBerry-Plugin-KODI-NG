@@ -1,12 +1,31 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.12 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.13 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.13
+
+Verbesserungen aus dem Durchgang (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidungen 16 und 19). Gemessen an
+Attrappen für Kodi und den Helfer unter PHP 7.4, 8.3 und 8.5; nicht am Gerät.
+
+* **Abodatei wird mitgeliefert:** `mqtt_subscriptions.cfg` folgt dem Präfix; unter
+  Gateway V1 ist nichts mehr von Hand einzutragen.
+* Neuer Knopf **„Addon-Thema angleichen“** nach einem Präfixwechsel.
+* Die Prüfzeile „Lebenszeichen“ nennt ein unzulässiges Präfix; neue Prüfzeile zur
+  Abodatei.
+* **Bei einer Beanstandung wird nichts gespeichert** – auch Lizenz und Autostart
+  gehen dann nicht an den Helfer. Werte werden nicht mehr still umgeschrieben
+  (`08080`, `::1`, `0300`). Die eingetippten Werte stehen markiert wieder im
+  Formular, ohne Passwort und Lizenz.
+* „Einstellungen sichern“ warnt auch bei Addon-Feldern des Plugins (`_warnung`).
+* Neu `preinstall.sh`: legt Einstellungen einer früheren Installation vor dem
+  ersten Seitenaufruf beiseite.
 
 ## Version 1.2.12 – was gespeichert heißt, steht auch da
 
@@ -1091,8 +1110,11 @@ sowie `erreichbar` (seit 1.2.10 nie retained).
 **Vom Kodi-Addon:** `event`, `movie_title`, `music_title`, `episode_title`,
 `unknown_title`, `screensaver`
 
-- **MQTT:** im MQTT Gateway mit `kodi/#` abonnieren (Gateway V1) bzw. die
-  Datenpunkte in den Subscriptions anhaken (Gateway V2).
+- **MQTT:** unter Gateway V1 abonniert das Gateway `<präfix>/#` selbst aus der
+  Abodatei des Plugins (`config/plugins/kodi_ng/mqtt_subscriptions.cfg`, das
+  Plugin führt sie beim Speichern und im Minutentakt nach); ein Eintrag von
+  Hand ist nur nötig, solange sie fehlt. Unter Gateway V2 die Datenpunkte in
+  den Subscriptions anhaken.
 - **UDP:** virtueller UDP-Eingang am Miniserver (Standard-Port 7000). Das
   Format der Addon-Ereignisse ist unverändert – in bestehenden Anlagen hängen
   Befehlserkennungen daran.

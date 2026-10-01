@@ -346,9 +346,18 @@ function ko_lebenszeichenprobe()
         return array(0, sprintf(ko_t('TEST.A_LEBEN_FALSCH'), ko_e(implode(', ', $widerspruch))));
     }
     list(, , , $zeilen) = ko_mqtt_publish($paare, true);
-    if (!$zeilen) { return array(0, ko_t('TEST.A_LEBEN_NICHTS')); }
     $cfg = ko_config();
     $praefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
+    if (!$zeilen) {
+        /* KODI-a2 (Verbesserungsbau 01.10.2026): ein unzulaessiges Praefix
+         * ist der haeufigste Grund, und dann wird es genannt - mit
+         * sichtbaren Steuerzeichen, wie in der Meldung beim Speichern. */
+        if (ko_wert_pruefen('mqtt_topic', $praefix) !== $praefix) {
+            return array(0, sprintf(ko_t('TEST.A_LEBEN_PRAEFIX'),
+                '<span class="sm-mono">' . ko_e(addcslashes($praefix, "\0..\37\177")) . '</span>'));
+        }
+        return array(0, ko_t('TEST.A_LEBEN_NICHTS'));
+    }
     $falsch = array();
     foreach ($zeilen as $z) {
         $w = explode(' ', $z, 3);
@@ -651,6 +660,23 @@ function ko_pruefungen(array $reiter, $indexdatei)
         $z[] = ko_pruefzeile(1, ko_t('TEST.F_GATEWAY'),
             sprintf(ko_t('TEST.A_GATEWAY_OK'), (int) $gw['udpinport'],
                 $gw['fassung'] > 0 ? 'V' . (int) $gw['fassung'] : ko_t('TEST.A_GATEWAY_FASSUNG_UNBEKANNT')));
+    }
+
+    /* --- Die Abodatei (KODI-c1, Verbesserungsbau 01.10.2026). Unter
+     *     Gateway V2 ist sie nicht noetig - dort ein Strich. */
+    list($abo_stand, $abo_grund, $abo_datei) = ko_abodatei_nachfuehren(false);
+    if ($gw !== null && (int) $gw['fassung'] >= 2) {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_ABODATEI'), ko_t('TEST.A_ABODATEI_V2'));
+    } elseif ($abo_stand === 1) {
+        $z[] = ko_pruefzeile(1, ko_t('TEST.F_ABODATEI'),
+            sprintf(ko_t('TEST.A_ABODATEI_OK'), '<span class="sm-mono">' . ko_e($abo_datei) . '</span>'));
+    } elseif ($abo_stand === 0) {
+        $z[] = ko_pruefzeile(0, ko_t('TEST.F_ABODATEI'),
+            sprintf(ko_t('TEST.A_ABODATEI_NEIN'), '<span class="sm-mono">' . ko_e($abo_datei) . '</span>',
+                ko_e($abo_grund)));
+    } else {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_ABODATEI'),
+            $abo_grund === 'praefix' ? ko_t('TEST.A_ABODATEI_PRAEFIX') : ko_t('TEST.A_ABODATEI_ARCHIV'));
     }
 
     /* --- Das Kodi-Addon: dieselben vier Werte auf beiden Seiten?

@@ -24,6 +24,7 @@
 
 SKRIPT="REPLACELBPBINDIR/kodi_ng_status.php"
 CFG="REPLACELBPCONFIGDIR/kodi.json"
+ABO="REPLACELBPCONFIGDIR/mqtt_subscriptions.cfg"
 LOGDATEI="REPLACELBPLOGDIR/kodi.log"
 
 # Gibt es noch gar keine Konfiguration, ist der Sender aus - das ist seine
@@ -42,8 +43,19 @@ fi
 # aus 1.1.9 stammt -, findet grep nichts, und der Lauf geht weiter zum
 # Skript, das die Frage richtig beantwortet. Ein Muster, das versehentlich
 # nirgends passt, haelt hier also nichts an.
+#
+# AUSSER DIE ABODATEI WEICHT AB (KODI-c1, Verbesserungsbau 01.10.2026): das
+# Kodi-Addon sendet unter dem Praefix auch ohne Statussender, und das
+# MQTT-Gateway V1 abonniert aus mqtt_subscriptions.cfg. Traegt sie nicht
+# <praefix>/#, laeuft der Sender einmal an, fuehrt sie nach und steigt am
+# Schalter aus. Ein Praefix ausserhalb der Positivliste gilt hier als "kodi" -
+# dafuer schreibt das Plugin die Datei ohnehin nicht.
 if grep -q '"sender_ein"[[:space:]]*:[[:space:]]*"0"' "$CFG"; then
-    exit 0
+    PRAEFIX=$(sed -n 's#.*"mqtt_topic"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._/-]*\)".*#\1#p' "$CFG" | head -n 1)
+    [ -n "$PRAEFIX" ] || PRAEFIX=kodi
+    if [ -f "$ABO" ] && [ "$(cat "$ABO" 2>/dev/null)" = "$PRAEFIX/#" ]; then
+        exit 0
+    fi
 fi
 
 # Fail loud statt still. Ein Cron-Eintrag, der schweigend nichts tut, ist
