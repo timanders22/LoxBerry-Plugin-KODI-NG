@@ -1558,39 +1558,96 @@ foreach (ko_themen() as $ko_th) {
     '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/status/ok</span>') ?></div>
 
 <h3><?= ko_e(ko_t('LOX.S6')) ?></h3>
-<div class="sm-hilfe"><?= ko_t('BAUSTEIN.VORTEXT') ?></div>
 <?php
-/* Die Namen der Eingaenge kommen aus DERSELBEN Rechnung wie die Vorlage
- * (Praefix, Unterstrich statt Schraegstrich) - eine zweite Schreibweise hier
- * waere eine zweite Anleitung. Jede Zeile bezieht sich nur auf kleinere
- * Nummern; kein UND/ODER mit mehr als zwei Eingaengen (Regeln/04, 09). */
+/* X-8 (02.10.2026, Entscheidung 36): EINE Liste fuer alles, was die beiden
+ * Vorlagen anlegen, und die Logik dazu. Titel, Adressen, Anzeigenamen und
+ * Grenzen kommen aus DEMSELBEN XML, das die Knoepfe in Schritt 3 und 4
+ * erzeugen (ko_vorlage(), ko_vorlage_vo()); die Befehle aus ko_vo_befehle().
+ * Die Texte stehen in [BAUSTEIN]; {Bn} bzw. {F:NAME} (Eingang des Themas
+ * NAME) wird zur laufenden Nummer "#n". Jede Zeile bezieht sich nur auf
+ * kleinere Nummern; kein UND/ODER mit mehr als zwei Eingaengen (Regeln/04).
+ * Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML.
+ * $ko_vn bleibt: Schritt 7 nennt damit den Eingang herzschlag. */
 $ko_vn = function ($name) use ($ko_cfg) {
     return '<span class="sm-mono">' . ko_e(str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name)) . '</span>';
 };
+$ko_bs_attr = function ($xml, $tag) {
+    preg_match_all('/<' . $tag . '\s([^>]*?)\/?>/', $xml, $ko_m);
+    $ko_aus = array();
+    foreach ($ko_m[1] as $ko_roh) {
+        preg_match_all('/(\w+)="([^"]*)"/', $ko_roh, $ko_a);
+        $ko_z = array();
+        foreach ($ko_a[1] as $ko_j => $ko_k) {
+            $ko_z[$ko_k] = html_entity_decode($ko_a[2][$ko_j], ENT_QUOTES | ENT_XML1, 'UTF-8');
+        }
+        $ko_aus[] = $ko_z;
+    }
+    return $ko_aus;
+};
+$ko_bs_mono = function ($s) { return '<span class="sm-mono">' . ko_e($s) . '</span>'; };
+$ko_bs_t = function ($s) { return ko_t('BAUSTEIN.' . $s); };
+list($ko_vi_datei, $ko_vi_xml) = ko_vorlage();
+list($ko_vo_datei, $ko_vo_xml) = ko_vorlage_vo();
+$ko_vi_kopf = $ko_bs_attr($ko_vi_xml, 'VirtualInHttp');
+$ko_vi_kopf = $ko_vi_kopf ? $ko_vi_kopf[0] : array('Title' => '', 'Address' => '', 'PollingTime' => '');
+$ko_vo_kopf = $ko_bs_attr($ko_vo_xml, 'VirtualOut');
+$ko_vo_kopf = $ko_vo_kopf ? $ko_vo_kopf[0] : array('Title' => '', 'Address' => '');
+/* Die Eingaenge in DERSELBEN Reihenfolge wie in ko_vorlage(): ko_themen(),
+ * gefiltert mit ko_thema_in_vorlage(). Daraus die Kennung {F:NAME}. */
+$ko_bs_th = array();
+foreach (ko_themen() as $ko_th) {
+    if (ko_thema_in_vorlage($ko_th, $ko_cfg)) { $ko_bs_th[] = $ko_th; }
+}
 $ko_bl = array(
-    array('B_VE', $ko_vn('dienst'),      ko_t('BAUSTEIN.P_DIGITAL'), ko_t('BAUSTEIN.V_GATEWAY')),
-    array('B_VE', $ko_vn('status/ok'),   ko_t('BAUSTEIN.P_DIGITAL'), ko_t('BAUSTEIN.V_GATEWAY')),
-    array('B_VE', $ko_vn('zeitstempel'), ko_t('BAUSTEIN.P_ZEIT'),    ko_t('BAUSTEIN.V_GATEWAY')),
-    array('B_FORMEL',    ko_e(ko_t('BAUSTEIN.N_ALTER')),    '<span class="sm-mono">I1+1230768000-I2</span>', ko_t('BAUSTEIN.V_ALTER')),
-    array('B_SCHWELL',   ko_e(ko_t('BAUSTEIN.N_STUMM')),    ko_t('BAUSTEIN.P_STUMM'),   ko_t('BAUSTEIN.V_4')),
-    array('B_NICHT',     ko_e(ko_t('BAUSTEIN.N_NICHTGEMESSEN')), '&mdash;',            ko_t('BAUSTEIN.V_2')),
-    array('B_ODER',      ko_e(ko_t('BAUSTEIN.N_SAMMEL')),   '&mdash;',                   ko_t('BAUSTEIN.V_5_6')),
-    array('B_EINVERZ',   ko_e(ko_t('BAUSTEIN.N_BESTAETIGT')), ko_t('BAUSTEIN.P_EINVERZ'), ko_t('BAUSTEIN.V_7')),
-    array('B_BENACHR',   ko_e(ko_t('BAUSTEIN.N_MELDUNG')),  ko_t('BAUSTEIN.P_MELDUNG'), ko_t('BAUSTEIN.V_8')),
-    array('B_STATUS',    ko_e(ko_t('BAUSTEIN.N_STATUS')),   ko_t('BAUSTEIN.P_STATUS'),  ko_t('BAUSTEIN.V_1_8')),
+    array('B1', sprintf($ko_bs_t('T_VI'), $ko_bs_mono($ko_vi_datei)), ko_e($ko_vi_kopf['Title']),
+          sprintf($ko_bs_t('P_VI'), $ko_bs_mono($ko_vi_kopf['Address']), ko_e($ko_vi_kopf['PollingTime'])), $ko_bs_t('V_KEINE')),
 );
+foreach ($ko_bs_attr($ko_vi_xml, 'VirtualInHttpCmd') as $ko_i => $ko_c) {
+    $ko_kz = isset($ko_bs_th[$ko_i]) ? 'F:' . strtoupper(str_replace('/', '_', $ko_bs_th[$ko_i]['name'])) : 'F:?' . $ko_i;
+    $ko_bl[] = array($ko_kz, $ko_bs_t('T_VIBEF'), $ko_bs_mono($ko_c['Title']),
+          sprintf($ko_bs_t('P_VIBEF'), ko_e($ko_c['Comment']), ko_e($ko_c['MinVal']), ko_e($ko_c['MaxVal'])), $ko_bs_t('V_GATEWAY'));
+}
+foreach (array(
+    array('B2', 'T_FORMEL',  'N_ALTER',     'P_ALTER',   'V_ALTER'),
+    array('B3', 'T_SCHWELL', 'N_STUMM',     'P_STUMM',   'V_STUMM'),
+    array('B4', 'T_NICHT',   'N_NICHTGEMESSEN', 'P_KEINE', 'V_NICHT'),
+    array('B5', 'T_ODER',    'N_SAMMEL',    'P_KEINE',   'V_ODER'),
+    array('B6', 'T_EINVERZ', 'N_BESTAETIGT', 'P_EINVERZ', 'V_EINVERZ'),
+    array('B7', 'T_BENACHR', 'N_MELDUNG',   'P_MELDUNG', 'V_MELDUNG'),
+    array('B8', 'T_FORMEL_OPT', 'N_ZAHL',   'P_ZAHL',    'V_ZAHL'),
+    array('B9', 'T_STATUS',  'N_STATUS',    'P_STATUS',  'V_STATUS'),
+) as $ko_z) {
+    $ko_bl[] = array($ko_z[0], $ko_bs_t($ko_z[1]), $ko_bs_t($ko_z[2]), $ko_bs_t($ko_z[3]), $ko_bs_t($ko_z[4]));
+}
+$ko_bl[] = array('B10', sprintf($ko_bs_t('T_VO'), $ko_bs_mono($ko_vo_datei)), ko_e($ko_vo_kopf['Title']),
+                 sprintf($ko_bs_t('P_VO'), $ko_bs_mono($ko_vo_kopf['Address'])), $ko_bs_t('V_KEINE'));
+$ko_bl[] = array('B11', $ko_bs_t('T_TASTER'), $ko_bs_t('N_TASTER'), $ko_bs_t('P_TASTER'), $ko_bs_t('V_KEINE'));
+foreach (ko_vo_befehle() as $ko_c) {
+    $ko_bl[] = array('C:' . $ko_c[0], $ko_bs_t('T_VOBEF'), $ko_bs_mono($ko_c[0]),
+          sprintf($ko_bs_t('P_VOBEF'), ko_e(ko_t('VOBEF.' . $ko_c[1])),
+                  $ko_bs_mono(html_entity_decode($ko_c[2], ENT_QUOTES | ENT_XML1, 'UTF-8'))),
+          $ko_bs_t($ko_c[1] === 'V_PLAYPAUSE' ? 'V_TASTER_BSP' : 'V_TASTER_SONST'));
+}
+$ko_bs_nr = array();
+foreach ($ko_bl as $ko_i => $ko_b) { $ko_bs_nr[$ko_b[0]] = $ko_i + 1; }
+$ko_bs_r = function ($s) use ($ko_bs_nr) {
+    return preg_replace_callback('/\{(B\d+|F:[A-Z_]+)\}/', function ($m) use ($ko_bs_nr) {
+        return isset($ko_bs_nr[$m[1]]) ? '#' . $ko_bs_nr[$m[1]] : $m[0];
+    }, (string) $s);
+};
 ?>
+<div class="sm-hilfe"><?= sprintf($ko_bs_r($ko_bs_t('VORTEXT')), '<i>' . ko_e($ko_vi_kopf['Title']) . '</i>', '<i>' . ko_e($ko_vo_kopf['Title']) . '</i>') ?></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= ko_e(ko_t('BAUSTEIN.SP_BAUSTEIN')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.SP_NAME')) ?></th>
     <th><?= ko_e(ko_t('BAUSTEIN.SP_PARAMETER')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.SP_EINGAENGE')) ?></th></tr>
 <?php foreach ($ko_bl as $ko_i => $ko_b) { ?>
-<tr><td><?= (int) $ko_i + 1 ?></td><td><?= ko_e(ko_t('BAUSTEIN.' . $ko_b[0])) ?></td><td><?= $ko_b[1] ?></td>
-    <td><?= $ko_b[2] ?></td><td><?= $ko_b[3] ?></td></tr>
+<tr><td><?= (int) $ko_i + 1 ?></td><td><?= $ko_bs_r($ko_b[1]) ?></td><td><?= $ko_bs_r($ko_b[2]) ?></td>
+    <td><?= $ko_bs_r($ko_b[3]) ?></td><td><?= $ko_bs_r($ko_b[4]) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-hilfe"><?= ko_t('BAUSTEIN.ZU') ?></div>
+<div class="sm-hilfe"><?= $ko_bs_r($ko_bs_t('ZU')) ?></div>
 
 <h3><?= ko_e(ko_t('LOX.S7')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.S7_TEXT'),

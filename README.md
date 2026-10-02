@@ -1,12 +1,27 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.13 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.14 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Version 1.2.14
+
+Baustein-Liste zum Nachbauen (Nachzug B: X-8, Hausregel A4).
+Gemessen mit der gerenderten Oberfläche unter PHP 7.4 und 8.5 gegen die mitgelieferten Vorlagen; nicht am Gerät.
+
+* **Baustein-Liste vollständig:** Schritt 6 im Reiter „Einbindung in Loxone“ nennt jetzt alles, was die beiden
+  Vorlagen anlegen, in einer durchnummerierten Liste (# | Baustein (Typ) | Name (Vorschlag) | Parameter | Eingänge
+  verbinden mit): den Eingang „Kodi Zustand“ mit jedem seiner Eingänge (Anzeigename, Min/Max), die Ausfallerkennung
+  wie bisher und den Ausgang „Kodi steuern (LoxBerry-Plugin)“ mit allen 26 Befehlen samt Befehlstext und einem Taster
+  als Bedienbeispiel. Titel, Adressen und Befehle stammen aus denselben Funktionen wie die Vorlagen.
+* **Status-Baustein mit einer Quelle:** Der optionale Status-Baustein bekommt seine Lage jetzt über eine Formel
+  (`I1+2*I2`) statt über zwei Eingänge; „gestört“ geht vor „läuft“.
+* **In Loxone:** nichts zwingend zu tun. Wer den Status-Baustein nach der alten Liste mit zwei Eingängen gebaut hat,
+  kann ihn über die Formel umstellen.
 
 ## Version 1.2.13
 
