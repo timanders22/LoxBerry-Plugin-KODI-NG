@@ -1127,6 +1127,8 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 
 <!-- ================= Einstellungen ================= -->
 <div class="sm-seite<?= ko_aktiv('tab-settings') ?>" id="tab-settings">
+<div class="sm-hinweis"><?= ko_t('EINST.WAS_IST_DAS') ?></div>
+
 <!-- Die Legende steht OBEN und nennt genau die Farben dieses Reiters
      (Regeln/04). Bis 1.2.6 stand sie erst unter dem Speichern-Knopf. -->
 <div class="sm-legende">
