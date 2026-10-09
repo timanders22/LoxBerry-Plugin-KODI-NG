@@ -1663,6 +1663,18 @@ $ko_bs_r = function ($s) use ($ko_bs_nr) {
 <?= $ko_bs_t('H_BEFEHLE') ?><br>
 <?= $ko_bs_t('H_ZUSTANDSZAHL') ?><br>
 <?= $ko_bs_t('H_KONSTANTE') ?></div>
+<?php /* 1.2.18 (Hausherr 10.10.2026): alle Befehle der Vorlage "Kodi steuern" - Zeilen nur aus
+       * ko_vo_befehle(), in deren Reihenfolge; Titel und Anzeigename, der JSON-Befehl nicht. */ ?>
+<div class="sm-step"><?= ko_e(sprintf($ko_bs_t('BEF_TITEL'), $ko_vo_kopf['Title'])) ?></div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ko_e($ko_bs_t('BEF_SP_BEFEHL')) ?></th><th><?= ko_e($ko_bs_t('BEF_SP_BEDEUTUNG')) ?></th></tr>
+<?php foreach (ko_vo_befehle() as $ko_c) { ?>
+<tr><td class="sm-mono"><?= ko_e($ko_c[0]) ?></td><td><?= ko_e(ko_t('VOBEF.' . $ko_c[1])) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-hilfe"><?= ko_e($ko_bs_t('BEF_UNTERSCHRIFT')) ?> <?= ko_e($ko_bs_r($ko_bs_t('BEF_TASTER'))) ?></div>
 <figure class="sm-bild">
 <img src="einbindung_loxone.png" alt="<?= ko_e(ko_t('LOX.BILD_ALT')) ?>" loading="lazy">
 <figcaption><?= ko_e(ko_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
