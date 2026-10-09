@@ -1,12 +1,31 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.16 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.17 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.17
+
+Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
+verlinkt die Projektdatei; die Baustein-Liste ist die dort in Loxone Config gebaute.
+
+* Unter der Baustein-Liste (Schritt 6) steht das Bild der Seite „Kodi-NG“ aus dem
+  [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt); das Bild liegt im Plugin,
+  nachgeladen wird nichts. Config kürzt lange Bausteinnamen, die vollen Namen stehen in der Tabelle.
+* **Baustein-Liste neu (13 feste Zeilen):** eine Zeile = ein Baustein, nur die Hauptvariante, so wie
+  im Musterprojekt gebaut und verbunden. Bisher stand je Eingang der Vorlage „Kodi Zustand“ und je
+  Befehl der Vorlage „Kodi steuern (LoxBerry-Plugin)“ eine Zeile da (ab Werk rund 40). Jetzt nur die
+  Eingänge `kodi_dienst`, `kodi_herzschlag`, `kodi_status_ok` und als Beispiel der Befehl
+  `Player.PlayPause Toggle` an der Taste „Kodi Wiedergabe/Pause“. Die Ausfallerkennung läuft über eine
+  Analogwertvalidierung „Kodi NG stumm“ auf den Herzschlag (Tmc 300 s, En an einer Konstante 1) statt
+  über Formel und Schwellwertschalter aus dem Zeitstempel. Unter der Tabelle drei neue Hinweise: die
+  übrigen Befehle hängen genauso an je einem Taster, was die Zustandszahl 0 bis 3 bedeutet, und dass
+  die Analogwertvalidierung nur mit der Konstante 1 an En prüft.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 1.2.16
 
@@ -1169,6 +1188,10 @@ sowie `erreichbar` (seit 1.2.10 nie retained).
 - `bin/kodi-rpc` ist ein Werkzeug für die **Befehlszeile**; das Plugin ruft es
   nicht auf. Verbindungsangaben über `-H`, `-P`, `-u`, `-p` oder eine eigene
   `~/.config/kodi-rpc.conf`.
+
+Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
+der Seite „Kodi-NG“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 Forum: https://www.loxforum.com/forum/projektforen/loxberry/plugins/150094-kodi-plugin-f%C3%BCr-loxberry
 
