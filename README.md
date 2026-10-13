@@ -1,12 +1,19 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.18 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.19 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.19
+
+Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt): Der Reiter „Einbindung in
+Loxone“ zeigt in Schritt 6 drei Baustein-Listen – Zustand und Meldungen, Fernbedienung sowie Wiedergabe
+und Automatik (Pause bei der Türklingel, Stopp beim Verlassen des Hauses, Anschluss für das Licht beim
+Filmstart) –, je mit Bild und Schritt-für-Schritt-Anleitung (28, 24 und 38 Zeilen statt 13).
 
 ## Neu in 1.2.18
 
@@ -1194,8 +1201,8 @@ sowie `erreichbar` (seit 1.2.10 nie retained).
   nicht auf. Verbindungsangaben über `-H`, `-P`, `-u`, `-p` oder eine eigene
   `~/.config/kodi-rpc.conf`.
 
-Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
-der Seite „Kodi-NG“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+Die Bausteine der drei Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
+den Seiten „Kodi-NG“, „Kodi-NG Fernbedienung“ und „Kodi-NG Wiedergabe“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 Forum: https://www.loxforum.com/forum/projektforen/loxberry/plugins/150094-kodi-plugin-f%C3%BCr-loxberry

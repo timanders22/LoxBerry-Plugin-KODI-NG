@@ -1042,6 +1042,11 @@ $ko_weburl = ko_kodi_url();
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
 .sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+/* Welle Bild 11 VOLL (1.2.19): Abschnitte, Schritte und Hinweise je Baustein-Liste. */
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
 </style>
 <div class="sm-wrap">
 
@@ -1569,10 +1574,8 @@ foreach (ko_themen() as $ko_th) {
  * Vorlagen anlegen, und die Logik dazu. Titel, Adressen, Anzeigenamen und
  * Grenzen kommen aus DEMSELBEN XML, das die Knoepfe in Schritt 3 und 4
  * erzeugen (ko_vorlage(), ko_vorlage_vo()); die Befehle aus ko_vo_befehle().
- * Die Texte stehen in [BAUSTEIN]; {Bn} bzw. {F:NAME} (Eingang des Themas
- * NAME) wird zur laufenden Nummer "#n". Jede Zeile bezieht sich nur auf
- * kleinere Nummern; kein UND/ODER mit mehr als zwei Eingaengen (Regeln/04).
- * Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML.
+ * Die Texte stehen in [BAUSTEIN]; kein UND/ODER mit mehr als zwei Eingaengen
+ * (Regeln/04). Seit 1.2.19 drei Listen, siehe unten.
  * $ko_vn bleibt: Schritt 7 nennt damit den Eingang herzschlag. */
 $ko_vn = function ($name) use ($ko_cfg) {
     return '<span class="sm-mono">' . ko_e(str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name)) . '</span>';
@@ -1604,67 +1607,240 @@ $ko_bs_th = array();
 foreach (ko_themen() as $ko_th) {
     if (ko_thema_in_vorlage($ko_th, $ko_cfg)) { $ko_bs_th[] = $ko_th; }
 }
-/* Welle Bild 5 (1.2.17, Entscheidung A): die Liste ist die im LoxBerry-Plugins Musterprojekt
- * in Loxone Config gebaute und mit leitungen_setzen.py verbundene (Musterprojekt/
- * baustein_listen.txt, Abschnitt Kodi-NG) - eine Zeile = ein Baustein, nur die Hauptvariante,
- * 13 feste Zeilen statt einer Zeile je Eingang und je Befehl. Die Namen #1 bis #3 kommen wie
- * bisher aus DEMSELBEN XML wie der Vorlage-Knopf (ko_vorlage(), Themen dienst, herzschlag,
- * status/ok), der Name von #13 aus ko_vo_befehle() (V_PLAYPAUSE), die Vorlagentitel aus den
- * XML-Koepfen. Uebrige Bausteinnamen in beiden Sprachen wie im Musterprojekt. */
+/* Welle Bild 11 VOLL (1.2.19, Hausherr 11.10.2026: Vollausstattung, ein absoluter Laie soll
+ * das Maximum leicht uebernehmen koennen): drei Seiten aus dem LoxBerry-Plugins Musterprojekt,
+ * dort in Loxone Config gebaut und mit leitungen_setzen.py verbunden
+ * (Musterprojekt/baustein_listen.txt, Abschnitte "Kodi-NG" 28, "Kodi-NG Fernbedienung" 24,
+ * "Kodi-NG Wiedergabe" 38 Zeilen). Je Seite: Ueberschrift, Kasten "So uebernehmen Sie diese
+ * Seite", Tabelle, Hinweise, Bild, Link - alle immer sichtbar. Bis 1.2.18 stand hier eine Seite
+ * mit 13 Zeilen.
+ * Die Namen der Eingaenge kommen wie bisher aus DEMSELBEN XML wie der Knopf in Schritt 3
+ * (ko_vorlage()); legt die Vorlage einen Eingang nicht an (erreichbar ohne Haken JSON-RPC),
+ * steht der Name, den das Gateway vergibt. Die Befehlsnamen kommen aus ko_vo_befehle(), ihr
+ * Parameter ist ihr Anzeigename aus [VOBEF]; die Vorlagentitel aus den XML-Koepfen. Die
+ * Virtuellen Texteingaenge legt keine Vorlage an (Regeln/07); ihr Name ist der Gateway-Name.
+ * Texte aus [BAUSTEIN]; jede Zelle ist fertiges, maskiertes HTML.
+ * Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
 $ko_vi_titel = array();
 foreach ($ko_bs_attr($ko_vi_xml, 'VirtualInHttpCmd') as $ko_i => $ko_c) {
     if (isset($ko_bs_th[$ko_i])) { $ko_vi_titel[$ko_bs_th[$ko_i]['name']] = $ko_c['Title']; }
 }
-$ko_bs_vi = function ($name) use ($ko_vi_titel, $ko_cfg, $ko_bs_mono) {
-    return $ko_bs_mono(isset($ko_vi_titel[$name]) ? $ko_vi_titel[$name]
-        : str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name));
+$ko_bs_tx = function ($name) use ($ko_cfg) {
+    return str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name);
 };
-$ko_bs_taste = '';
-foreach (ko_vo_befehle() as $ko_c) {
-    if ($ko_c[1] === 'V_PLAYPAUSE') { $ko_bs_taste = $ko_c[0]; }
-}
-$ko_bs_vit = ko_e($ko_vi_kopf['Title']);
-$ko_bs_vot = ko_e($ko_vo_kopf['Title']);
-$ko_bl = array(
-    array('B1', sprintf($ko_bs_t('B1_TYP'), $ko_bs_vit), $ko_bs_vi('dienst'), $ko_bs_t('B1_PARAM'), $ko_bs_t('B1_VERB')),
-    array('B2', sprintf($ko_bs_t('B2_TYP'), $ko_bs_vit), $ko_bs_vi('herzschlag'), $ko_bs_t('B2_PARAM'), $ko_bs_t('B2_VERB')),
-    array('B3', sprintf($ko_bs_t('B3_TYP'), $ko_bs_vit), $ko_bs_vi('status/ok'), $ko_bs_t('B3_PARAM'), $ko_bs_t('B3_VERB')),
-    array('B4', $ko_bs_t('B4_TYP'), ko_e($ko_bs_t('B4_NAME')), $ko_bs_t('B4_PARAM'), $ko_bs_t('B4_VERB')),
-    array('B5', $ko_bs_t('B5_TYP'), ko_e($ko_bs_t('B5_NAME')), $ko_bs_t('B5_PARAM'), $ko_bs_t('B5_VERB')),
-    array('B6', $ko_bs_t('B6_TYP'), ko_e($ko_bs_t('B6_NAME')), $ko_bs_t('B6_PARAM'), $ko_bs_t('B6_VERB')),
-    array('B7', $ko_bs_t('B7_TYP'), ko_e($ko_bs_t('B7_NAME')), $ko_bs_t('B7_PARAM'), $ko_bs_t('B7_VERB')),
-    array('B8', $ko_bs_t('B8_TYP'), ko_e($ko_bs_t('B8_NAME')), $ko_bs_t('B8_PARAM'), $ko_bs_t('B8_VERB')),
-    array('B9', $ko_bs_t('B9_TYP'), ko_e($ko_bs_t('B9_NAME')), $ko_bs_t('B9_PARAM'), $ko_bs_t('B9_VERB')),
-    array('B10', $ko_bs_t('B10_TYP'), ko_e($ko_bs_t('B10_NAME')), $ko_bs_t('B10_PARAM'), $ko_bs_t('B10_VERB')),
-    array('B11', $ko_bs_t('B11_TYP'), ko_e($ko_bs_t('B11_NAME')), $ko_bs_t('B11_PARAM'), $ko_bs_t('B11_VERB')),
-    array('B12', $ko_bs_t('B12_TYP'), ko_e($ko_bs_t('B12_NAME')), $ko_bs_t('B12_PARAM'), $ko_bs_t('B12_VERB')),
-    array('B13', sprintf($ko_bs_t('B13_TYP'), $ko_bs_vot), $ko_bs_mono($ko_bs_taste), $ko_bs_t('B13_PARAM'), $ko_bs_t('B13_VERB')),
+$ko_bs_gw = function ($name) use ($ko_vi_titel, $ko_bs_tx) {
+    return isset($ko_vi_titel[$name]) ? $ko_vi_titel[$name] : $ko_bs_tx($name);
+};
+$ko_bs_vo_titel = array();
+foreach (ko_vo_befehle() as $ko_c) { $ko_bs_vo_titel[$ko_c[1]] = $ko_c[0]; }
+$ko_bs_vo = function ($schl) use ($ko_bs_vo_titel) {
+    return isset($ko_bs_vo_titel[$schl]) ? $ko_bs_vo_titel[$schl] : '{' . $schl . '}';
+};
+/* Erst vsprintf auf den Sprachtext, dann maskieren: eingesetzte Titel kommen nie roh heraus. */
+$ko_bs_k = function ($schluessel, $argumente = array()) {
+    $s = (string) ko_t('BAUSTEIN.' . $schluessel);
+    return ko_e($argumente ? vsprintf($s, $argumente) : $s);
+};
+$ko_bs_m = '&mdash;';
+$ko_bs_ein = function ($nr) use ($ko_bs_k) { return $ko_bs_k('E_EIN', array($nr)); };
+$ko_bs_aus = function ($pin, $nr) use ($ko_bs_k) { return $ko_bs_k('E_AUSGANG', array($pin, $nr)); };
+/* Eingang aus der Vorlage "Kodi Zustand": Typ mit Vorlagentitel, Name aus dem XML. */
+$ko_bs_vi_z = function ($nr, $thema, $param) use ($ko_bs_k, $ko_bs_gw, $ko_bs_mono, $ko_vi_kopf, $ko_bs_m) {
+    return array($nr, $ko_bs_k('TYP_VI', array($ko_vi_kopf['Title'])), $ko_bs_mono($ko_bs_gw($thema)),
+                 $ko_bs_k($param), $ko_bs_m);
+};
+/* Befehl aus der Vorlage "Kodi steuern": Name = Titel, Parameter = Anzeigename [VOBEF]. */
+$ko_bs_vo_z = function ($nr, $schl, $verb) use ($ko_bs_k, $ko_bs_vo, $ko_bs_mono, $ko_vo_kopf) {
+    return array($nr, $ko_bs_k('TYP_VO', array($ko_vo_kopf['Title'])), $ko_bs_mono($ko_bs_vo($schl)),
+                 ko_e(ko_t('VOBEF.' . $schl)), $verb);
+};
+/* Virtueller Texteingang: Name = Gateway-Name des Themas. */
+$ko_bs_tx_z = function ($nr, $thema, $param) use ($ko_bs_k, $ko_bs_tx, $ko_bs_mono, $ko_bs_m) {
+    return array($nr, $ko_bs_k('T_TEXTEIN'), $ko_bs_mono($ko_bs_tx($thema)), $ko_bs_k($param), $ko_bs_m);
+};
+/* Uebriger Baustein: Typ-Schluessel, Name <S>_NAME, Parameter <S>_PARAM. */
+$ko_bs_zl = function ($nr, $typ, $s, $param, $verb) use ($ko_bs_k, $ko_bs_m) {
+    return array($nr, $ko_bs_k($typ), $ko_bs_k($s . '_NAME'), $param === '' ? $ko_bs_m : $ko_bs_k($param), $verb);
+};
+$ko_bs_seiten = array(
+    array('kopf' => 'BL_ZUSTAND', 'seite' => 'Kodi-NG', 'bild' => 'einbindung_loxone.png', 'zeilen' => array(
+        $ko_bs_vi_z(1, 'dienst', 'S1_01_PARAM'),
+        $ko_bs_vi_z(2, 'herzschlag', 'S1_02_PARAM'),
+        $ko_bs_vi_z(3, 'status/ok', 'S1_03_PARAM'),
+        $ko_bs_zl(4, 'T_KONSTANTE', 'S1_04', 'S1_04_PARAM', $ko_bs_m),
+        $ko_bs_zl(5, 'T_VALID', 'S1_05', 'S1_05_PARAM', 'V = #2, En = #4'),
+        $ko_bs_zl(6, 'T_NICHT', 'S1_06', '', 'I = #3'),
+        $ko_bs_zl(7, 'T_ODER', 'S1_07', '', 'I1 = ' . $ko_bs_aus('error', 5) . ', I2 = #6'),
+        $ko_bs_zl(8, 'T_EVZ', 'S1_08', 'S1_08_PARAM', $ko_bs_ein(7)),
+        $ko_bs_zl(9, 'T_BENACHR', 'S1_09', 'S1_09_PARAM', $ko_bs_ein(8)),
+        $ko_bs_zl(10, 'T_FORMEL', 'S1_10', 'S1_10_PARAM', 'I1 = #1, I2 = #8'),
+        $ko_bs_zl(11, 'T_STATUS', 'S1_11', 'S1_11_PARAM', 'V1 = #10'),
+        $ko_bs_zl(12, 'T_VTASTE', 'S1_12', 'S1_12_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(13, 'V_PLAYPAUSE', $ko_bs_ein(12)),
+        $ko_bs_vi_z(14, 'autostart', 'S1_14_PARAM'),
+        $ko_bs_zl(15, 'T_STATUS', 'S1_15', 'S1_15_PARAM', 'V1 = #14, V2 = #2'),
+        $ko_bs_zl(16, 'T_NICHT', 'S1_16', '', 'I = #1'),
+        $ko_bs_zl(17, 'T_UND', 'S1_17', 'S1_17_PARAM', 'I1 = #16, I2 = #14'),
+        $ko_bs_zl(18, 'T_EVZ', 'S1_18', 'S1_18_PARAM', $ko_bs_ein(17)),
+        $ko_bs_zl(19, 'T_BENACHR', 'S1_19', 'S1_19_PARAM', $ko_bs_ein(18)),
+        $ko_bs_zl(20, 'T_STATUS', 'S1_20', 'S1_20_PARAM', 'V1 = #2, V2 = #3'),
+        $ko_bs_vi_z(21, 'erreichbar', 'S1_21_PARAM'),
+        $ko_bs_zl(22, 'T_VSCHALTER', 'S1_22', 'S1_22_PARAM', $ko_bs_m),
+        $ko_bs_zl(23, 'T_NICHT', 'S1_23', '', 'I = #21'),
+        $ko_bs_zl(24, 'T_UND', 'S1_24', '', 'I1 = #1, I2 = #23'),
+        $ko_bs_zl(25, 'T_UND', 'S1_25', 'S1_25_PARAM', 'I1 = #24, I2 = #22'),
+        $ko_bs_zl(26, 'T_EVZ', 'S1_26', 'S1_26_PARAM', $ko_bs_ein(25)),
+        $ko_bs_zl(27, 'T_BENACHR', 'S1_27', 'S1_27_PARAM', $ko_bs_ein(26)),
+        $ko_bs_zl(28, 'T_STATUS', 'S1_28', 'S1_28_PARAM', 'V1 = #22, V2 = #1, V3 = #21'),
+        ),
+        'schritte' => array(
+            array('S1_SCHRITT1', array()),
+            array('S1_SCHRITT2', array(ko_t('EINST.L_SENDER'), ko_t('ADDON.K_SETZEN'), ko_t('ADDON.L_ANHALTEN'))),
+            array('S1_SCHRITT3', array(ko_t('REITER.EINSTELLUNGEN'), ko_t('EINST.L_RPC'), $ko_bs_gw('erreichbar'))),
+            array('S1_SCHRITT4', array(ko_t('LOX.K_VORLAGE'), ko_t('LOX.K_VORLAGE_VO'))),
+            array('S1_SCHRITT5', array($ko_vi_datei, $ko_vo_datei)),
+            array('S1_SCHRITT6', array($ko_vi_kopf['Title'], $ko_bs_gw('dienst'), $ko_bs_gw('herzschlag'), $ko_bs_gw('status/ok'), $ko_bs_gw('autostart'), $ko_bs_gw('erreichbar'), $ko_vo_kopf['Title'], $ko_bs_vo('V_PLAYPAUSE'))),
+            array('S1_SCHRITT7', array()),
+            array('S1_SCHRITT8', array()),
+            array('S1_SCHRITT9', array(ko_t('BAUSTEIN.SP_EINGAENGE'))),
+            array('S1_SCHRITT10', array($ko_bs_gw('herzschlag'))),
+            array('S1_SCHRITT11', array()),
+        ),
+        'hinweise' => array(
+            array('S1_H1', array()),
+            array('S1_H2', array()),
+            array('S1_H3', array(ko_t('TEST.K_START'), ko_t('REITER.EINSTELLUNGEN'))),
+            array('S1_H4', array($ko_bs_gw('erreichbar'))),
+        )),
+    array('kopf' => 'BL_FERN', 'seite' => 'Kodi-NG Fernbedienung', 'bild' => 'einbindung_loxone_fernbedienung.png', 'zeilen' => array(
+        $ko_bs_zl(1, 'T_VTASTE', 'S2_01', 'S2_01_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(2, 'V_UP', $ko_bs_ein(1)),
+        $ko_bs_zl(3, 'T_VTASTE', 'S2_03', 'S2_03_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(4, 'V_DOWN', $ko_bs_ein(3)),
+        $ko_bs_zl(5, 'T_VTASTE', 'S2_05', 'S2_05_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(6, 'V_LEFT', $ko_bs_ein(5)),
+        $ko_bs_zl(7, 'T_VTASTE', 'S2_07', 'S2_07_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(8, 'V_RIGHT', $ko_bs_ein(7)),
+        $ko_bs_zl(9, 'T_VTASTE', 'S2_09', 'S2_09_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(10, 'V_SELECT', $ko_bs_ein(9)),
+        $ko_bs_zl(11, 'T_VTASTE', 'S2_11', 'S2_11_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(12, 'V_BACK', $ko_bs_ein(11)),
+        $ko_bs_zl(13, 'T_VTASTE', 'S2_13', 'S2_13_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(14, 'V_HOME', $ko_bs_ein(13)),
+        $ko_bs_zl(15, 'T_VTASTE', 'S2_15', 'S2_15_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(16, 'V_CONTEXT', $ko_bs_ein(15)),
+        $ko_bs_zl(17, 'T_VTASTE', 'S2_17', 'S2_17_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(18, 'V_INFO', $ko_bs_ein(17)),
+        $ko_bs_zl(19, 'T_VTASTE', 'S2_19', 'S2_19_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(20, 'V_OSD', $ko_bs_ein(19)),
+        $ko_bs_zl(21, 'T_VTASTE', 'S2_21', 'S2_21_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(22, 'V_PAGEUP', $ko_bs_ein(21)),
+        $ko_bs_zl(23, 'T_VTASTE', 'S2_23', 'S2_23_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(24, 'V_PAGEDOWN', $ko_bs_ein(23)),
+        ),
+        'schritte' => array(
+            array('S2_SCHRITT1', array()),
+            array('S2_SCHRITT2', array($ko_vo_kopf['Title'], implode(', ', array_map($ko_bs_vo, array('V_UP', 'V_DOWN', 'V_LEFT', 'V_RIGHT', 'V_SELECT', 'V_BACK', 'V_HOME', 'V_CONTEXT', 'V_INFO', 'V_OSD', 'V_PAGEUP', 'V_PAGEDOWN'))))),
+            array('S2_SCHRITT3', array()),
+            array('S2_SCHRITT4', array()),
+        ),
+        'hinweise' => array(
+            array('S2_H1', array()),
+            array('S2_H2', array($ko_vo_kopf['Title'])),
+        )),
+    array('kopf' => 'BL_WIEDERGABE', 'seite' => 'Kodi-NG Wiedergabe', 'bild' => 'einbindung_loxone_wiedergabe.png', 'zeilen' => array(
+        $ko_bs_zl(1, 'T_VTASTE', 'S3_01', 'S3_01_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(2, 'V_PLAY', $ko_bs_ein(1)),
+        $ko_bs_zl(3, 'T_VTASTE', 'S3_03', 'S3_03_PARAM', $ko_bs_m),
+        $ko_bs_zl(4, 'T_VTASTE', 'S3_04', 'S3_04_PARAM', $ko_bs_m),
+        $ko_bs_zl(5, 'T_ODER', 'S3_05', 'S3_05_PARAM', 'I1 = #3, I2 = #4'),
+        $ko_bs_vo_z(6, 'V_PAUSE', $ko_bs_ein(5)),
+        $ko_bs_zl(7, 'T_VTASTE', 'S3_07', 'S3_07_PARAM', $ko_bs_m),
+        $ko_bs_zl(8, 'T_VSCHALTER', 'S3_08', 'S3_08_PARAM', $ko_bs_m),
+        $ko_bs_zl(9, 'T_FLANKE', 'S3_09', 'S3_09_PARAM', $ko_bs_ein(8)),
+        $ko_bs_zl(10, 'T_ODER', 'S3_10', 'S3_10_PARAM', 'I1 = #7, I2 = ' . $ko_bs_aus('On', 9)),
+        $ko_bs_vo_z(11, 'V_STOP', $ko_bs_ein(10)),
+        $ko_bs_zl(12, 'T_VTASTE', 'S3_12', 'S3_12_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(13, 'V_NEXT', $ko_bs_ein(12)),
+        $ko_bs_zl(14, 'T_VTASTE', 'S3_14', 'S3_14_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(15, 'V_PREV', $ko_bs_ein(14)),
+        $ko_bs_zl(16, 'T_VTASTE', 'S3_16', 'S3_16_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(17, 'V_SEEK_VOR', $ko_bs_ein(16)),
+        $ko_bs_zl(18, 'T_VTASTE', 'S3_18', 'S3_18_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(19, 'V_SEEK_ZUR', $ko_bs_ein(18)),
+        $ko_bs_zl(20, 'T_VTASTE', 'S3_20', 'S3_20_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(21, 'V_VOL_AUF', $ko_bs_ein(20)),
+        $ko_bs_zl(22, 'T_VTASTE', 'S3_22', 'S3_22_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(23, 'V_VOL_AB', $ko_bs_ein(22)),
+        $ko_bs_zl(24, 'T_VTASTE', 'S3_24', 'S3_24_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(25, 'V_MUTE_UM', $ko_bs_ein(24)),
+        $ko_bs_zl(26, 'T_VTASTE', 'S3_26', 'S3_26_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(27, 'V_MUTE_AN', $ko_bs_ein(26)),
+        $ko_bs_zl(28, 'T_VTASTE', 'S3_28', 'S3_28_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(29, 'V_MUTE_AUS', $ko_bs_ein(28)),
+        $ko_bs_zl(30, 'T_VTASTE', 'S3_30', 'S3_30_PARAM', $ko_bs_m),
+        $ko_bs_vo_z(31, 'V_QUIT', $ko_bs_ein(30)),
+        $ko_bs_tx_z(32, 'event', 'S3_32_PARAM'),
+        $ko_bs_tx_z(33, 'movie_title', 'S3_33_PARAM'),
+        $ko_bs_tx_z(34, 'episode_title', 'S3_34_PARAM'),
+        $ko_bs_tx_z(35, 'music_title', 'S3_35_PARAM'),
+        $ko_bs_tx_z(36, 'screensaver', 'S3_36_PARAM'),
+        $ko_bs_zl(37, 'T_STATUS', 'S3_37', 'S3_37_PARAM', 'V1 = #32, V2 = #33, V3 = #34, V4 = #35, V5 = #36'),
+        $ko_bs_zl(38, 'T_FLANKE', 'S3_38', 'S3_38_PARAM', $ko_bs_k('E_EIN_AUSGANG', array('AQ', 37))),
+        ),
+        'schritte' => array(
+            array('S3_SCHRITT1', array()),
+            array('S3_SCHRITT2', array($ko_vo_kopf['Title'], $ko_bs_vo('V_PLAYPAUSE'))),
+            array('S3_SCHRITT3', array()),
+            array('S3_SCHRITT4', array()),
+            array('S3_SCHRITT5', array(implode(', ', array_map($ko_bs_tx, array('event', 'movie_title', 'episode_title', 'music_title', 'screensaver'))), $ko_cfg['mqtt_topic'])),
+            array('S3_SCHRITT6', array()),
+            array('S3_SCHRITT7', array(ko_t('BAUSTEIN.SP_EINGAENGE'))),
+            array('S3_SCHRITT8', array()),
+        ),
+        'hinweise' => array(
+            array('S3_H1', array()),
+            array('S3_H2', array()),
+            array('S3_H3', array(ko_t('REITER.EINSTELLUNGEN'))),
+            array('S3_H4', array()),
+            array('S3_H5', array(ko_t('ADDON.K_SETZEN'))),
+        )),
 );
-$ko_bs_nr = array();
-foreach ($ko_bl as $ko_i => $ko_b) { $ko_bs_nr[$ko_b[0]] = $ko_i + 1; }
-$ko_bs_r = function ($s) use ($ko_bs_nr) {
-    return preg_replace_callback('/\{(B\d+|F:[A-Z_]+)\}/', function ($m) use ($ko_bs_nr) {
-        return isset($ko_bs_nr[$m[1]]) ? '#' . $ko_bs_nr[$m[1]] : $m[0];
-    }, (string) $s);
-};
 ?>
-<div class="sm-hilfe"><?= sprintf($ko_bs_r($ko_bs_t('VORTEXT')), '<i>' . ko_e($ko_vi_kopf['Title']) . '</i>', '<i>' . ko_e($ko_vo_kopf['Title']) . '</i>') ?></div>
+<div class="sm-hilfe"><?= sprintf($ko_bs_t('VORTEXT'), '<i>' . ko_e($ko_vi_kopf['Title']) . '</i>', '<i>' . ko_e($ko_vo_kopf['Title']) . '</i>') ?></div>
+<?php foreach ($ko_bs_seiten as $ko_bs_s) { ?>
+<h4 class="sm-h4"><?= ko_e(ko_t('LOX.' . $ko_bs_s['kopf'])) ?></h4>
+<div class="sm-hinweis"><b><?= $ko_bs_k('SCHRITTE_TITEL') ?></b>
+<ol class="sm-schritte">
+<?php foreach ($ko_bs_s['schritte'] as $ko_bs_x) { ?>
+<li><?= $ko_bs_k($ko_bs_x[0], $ko_bs_x[1]) ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= ko_e(ko_t('BAUSTEIN.SP_BAUSTEIN')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.SP_NAME')) ?></th>
     <th><?= ko_e(ko_t('BAUSTEIN.SP_PARAMETER')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.SP_EINGAENGE')) ?></th></tr>
-<?php foreach ($ko_bl as $ko_i => $ko_b) { ?>
-<tr><td><?= (int) $ko_i + 1 ?></td><td><?= $ko_bs_r($ko_b[1]) ?></td><td><?= $ko_bs_r($ko_b[2]) ?></td>
-    <td><?= $ko_bs_r($ko_b[3]) ?></td><td><?= $ko_bs_r($ko_b[4]) ?></td></tr>
+<?php foreach ($ko_bs_s['zeilen'] as $ko_bs_z) { ?>
+<tr><td><?= (int) $ko_bs_z[0] ?></td><td><?= $ko_bs_z[1] ?></td><td><?= $ko_bs_z[2] ?></td>
+    <td><?= $ko_bs_z[3] ?></td><td><?= $ko_bs_z[4] ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-hilfe"><?= $ko_bs_r($ko_bs_t('ZU')) ?><br>
-<?= $ko_bs_t('H_BEFEHLE') ?><br>
-<?= $ko_bs_t('H_ZUSTANDSZAHL') ?><br>
-<?= $ko_bs_t('H_KONSTANTE') ?></div>
+<div class="sm-warnung"><b><?= $ko_bs_k('HINWEISE_TITEL') ?></b>
+<ul class="sm-schritte">
+<?php foreach ($ko_bs_s['hinweise'] as $ko_bs_x) { ?>
+<li><?= $ko_bs_k($ko_bs_x[0], $ko_bs_x[1]) ?></li>
+<?php } ?>
+</ul></div>
+<figure class="sm-bild">
+<img src="<?= ko_e($ko_bs_s['bild']) ?>" alt="<?= ko_e(sprintf(ko_t('LOX.BILD_ALT'), $ko_bs_s['seite'])) ?>" loading="lazy">
+<figcaption><?= ko_e(sprintf(ko_t('LOX.BILD_UNTERSCHRIFT'), $ko_bs_s['seite'])) ?></figcaption>
+</figure>
+<div class="sm-hilfe"><?= ko_t('LOX.MUSTERPROJEKT') ?></div>
+<?php } ?>
 <?php /* 1.2.18 (Hausherr 10.10.2026): alle Befehle der Vorlage "Kodi steuern" - Zeilen nur aus
-       * ko_vo_befehle(), in deren Reihenfolge; Titel und Anzeigename, der JSON-Befehl nicht. */ ?>
+       * ko_vo_befehle(), in deren Reihenfolge; Titel und Anzeigename, der JSON-Befehl nicht.
+       * 1.2.19: bleibt unter den drei Listen. */ ?>
 <div class="sm-step"><?= ko_e(sprintf($ko_bs_t('BEF_TITEL'), $ko_vo_kopf['Title'])) ?></div>
 <div class="sm-breit">
 <table class="sm-tbl">
@@ -1674,12 +1850,7 @@ $ko_bs_r = function ($s) use ($ko_bs_nr) {
 <?php } ?>
 </table>
 </div>
-<div class="sm-hilfe"><?= ko_e($ko_bs_t('BEF_UNTERSCHRIFT')) ?> <?= ko_e($ko_bs_r($ko_bs_t('BEF_TASTER'))) ?></div>
-<figure class="sm-bild">
-<img src="einbindung_loxone.png" alt="<?= ko_e(ko_t('LOX.BILD_ALT')) ?>" loading="lazy">
-<figcaption><?= ko_e(ko_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
-</figure>
-<div class="sm-hilfe"><?= ko_t('LOX.MUSTERPROJEKT') ?></div>
+<div class="sm-hilfe"><?= ko_e($ko_bs_t('BEF_UNTERSCHRIFT')) ?> <?= ko_e($ko_bs_t('BEF_TASTER')) ?></div>
 
 <h3><?= ko_e(ko_t('LOX.S7')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.S7_TEXT'),
