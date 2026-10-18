@@ -1,12 +1,20 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.20 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.21 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.21
+
+Einbindung in Loxone, Seite „Kodi-NG Wiedergabe“: Text zu Nr. 4 „Türklingel (eigene Quelle)“
+berichtigt. Als eigene Quelle für den Platzhalter nennt die Tabelle jetzt den Digitaleingang des
+Klingeltasters oder den Klingelausgang der eigenen Türstation (bisher „Intercom-Plugin“ – Loxone ruft
+das Intercom-Plugin auf, nicht umgekehrt). Wortgleich mit dem Musterprojekt. Kein Neuimport nötig,
+Vorlagen und Dienst sind unverändert.
 
 ## Neu in 1.2.20
 
