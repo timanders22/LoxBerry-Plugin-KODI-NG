@@ -55,6 +55,13 @@ fi
 # die niemand mehr liest, und setzte die Ausfuehrungsrechte an einer Stelle,
 # an der keine Datei liegt. Ohne jede Meldung.
 PDIR="${ARGV3:-kodi_ng}"
+# K5 (1.2.22, Hausform Matter2Lox 0.9.44): der Ordnername kommt vom Installer aus der eigenen plugin.cfg;
+# trotzdem kein Pfadtrenner, kein ".." und nicht "." oder ".." selbst - alle rm -rf haengen ihn an.
+case "$PDIR" in
+    ''|.|..|*/*|*..*)
+        echo "<FAIL> Unzulaessiger Ordnername '$PDIR' - Verzeichnisse und Rechte wurden NICHT eingerichtet."
+        exit 1 ;;
+esac
 
 # ---------- Die Marke "Aktualisierung laeuft" (Entscheidung 1, Befund I1) ----------
 #
@@ -63,20 +70,14 @@ PDIR="${ARGV3:-kodi_ng}"
 # Entschieden wird ALLEIN am Vorhandensein, ohne Altersvergleich: zwischen
 # preupgrade.sh und diesem Skript liegt die apt-Installation von Kodi, und die
 # kann laenger als eine Stunde dauern (Praezisierung des Hausherrn vom
-# 29.09.2026, gemessen an der Funkwacht). Entfernt wird sie ueber einen trap,
-# nicht am Dateiende - jeder Ausstieg nimmt sie mit, und der Rueckgabewert
-# bleibt erhalten. postupgrade.sh braucht sie nicht mehr: bei einer
-# Neuinstallation laeuft es nicht, und eine Upgrade-Sicherung aus einem
-# frueheren Vorgang hat preupgrade.sh schon weggeraeumt.
+# 29.09.2026, gemessen an der Funkwacht).
+# K1 (1.2.22, Entscheidung 2 vom 23.10.2026): dieses Skript entfernt sie NICHT mehr. Bis 1.2.21 nahm ein trap
+# sie bei jedem Ausstieg mit; brach das Update danach, vor postupgrade.sh, ab, sah der zweite Anlauf keine
+# Marke und raeumte die einzige Sicherung weg (Pruefbericht Fall D). Jetzt faellt sie in postupgrade.sh, erst
+# nach dem geprueften Zurueckstellen; bei einer Neuinstallation liegt sie gar nicht.
 MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
 KO_UPGRADE=0
 if [ -f "$MARKE" ]; then KO_UPGRADE=1; fi
-ko_marke_weg() {
-    ko_rc=$?
-    rm -f "$MARKE" 2>/dev/null
-    exit "$ko_rc"
-}
-trap ko_marke_weg EXIT
 
 mkdir -p "$BASE/log/plugins/$PDIR" "$BASE/config/plugins/$PDIR" \
          "$BASE/data/plugins/$PDIR" 2>/dev/null
@@ -86,7 +87,10 @@ mkdir -p "$BASE/log/plugins/$PDIR" "$BASE/config/plugins/$PDIR" \
 # ko_lib.php steht bewusst NICHT dabei: sie wird eingebunden, nicht
 # aufgerufen. Ein Ausfuehrungsrecht darauf waere eine Behauptung ueber ihren
 # Zweck, die nicht stimmt.
-chmod 755 "$BASE/bin/plugins/$PDIR/kodi-rpc" 2>/dev/null
+# Die Befehlsbruecke (seit 1.2.22): nur ausfuehrbar machen, NICHT starten - der Waechter in cron.01min startet
+# sie binnen einer Minute, sobald die Marke fort ist und "Befehle ueber MQTT annehmen" gesetzt ist. Das frueher
+# mitgelieferte Befehlszeilenwerkzeug ist entfallen (K7: nirgends aufgerufen).
+chmod 755 "$BASE/bin/plugins/$PDIR/befehlsbruecke.sh" 2>/dev/null
 chmod 755 "$BASE/bin/plugins/$PDIR/elevatedhelper.pl" 2>/dev/null
 chmod 755 "$BASE/bin/plugins/$PDIR/kodi_ng_status.php" 2>/dev/null
 
@@ -212,9 +216,9 @@ ko_cfg_inhalt() {
 # widersprach sich zwei Zeilen spaeter).
 ko_anleitung() {
     echo "<INFO> Naechster Schritt: Plugin-Oberflaeche oeffnen."
-    echo "<INFO> Dort laesst sich der Kodi-Dienst starten und der Statussender"
-    echo "<INFO> einschalten (ab Werk aus), und es entstehen die Vorlagen fuer"
-    echo "<INFO> Loxone Config. Den Autostart von Kodi schaltet die Installation"
+    echo "<INFO> Dort laesst sich der Kodi-Dienst starten; der Statussender ist ab dem"
+    echo "<INFO> ersten Speichern an. Der Reiter Einbindung nennt die Namen der Eingaenge"
+    echo "<INFO> und erzeugt die Vorlage der Befehle. Den Autostart von Kodi schaltet die Installation"
     echo "<INFO> beim ersten Einspielen ein; in der Oberflaeche laesst er sich abschalten."
 }
 ko_cfg_inhalt "$BASE/config/plugins/$PDIR/kodi.json"

@@ -3,6 +3,8 @@
 use LoxBerry::System;
 use CGI;
 use Fcntl qw(O_RDONLY O_WRONLY O_CREAT O_EXCL O_NOFOLLOW O_NONBLOCK);
+# IO::Handle fuer flush/sync (fsync) vor dem Umbenennen (1.2.22, Pruefbericht E6).
+use IO::Handle;
 use warnings;
 use strict;
 
@@ -337,10 +339,73 @@ if ($action eq "advread") {
 	# dem leeren Feld einen Wert ableitet, den diese Datei nie genannt hat.
 	my $ws = ($inhalt =~ m{<webserver>\s*([^<\s]+)\s*</webserver>}i) ? lc $1 : '';
 	my $pt = ($inhalt =~ m{<webserverport>\s*(\d{1,5})\s*</webserverport>}i) ? $1 : '';
+	# 1.2.22 (Entwurf 3.6): Kodis Fernsteuerung aus dem Heimnetz - true, false oder leer (nicht gesetzt).
+	my $netz = ($inhalt =~ m{<esallinterfaces>\s*([^<\s]+)\s*</esallinterfaces>}i) ? lc $1 : '';
 	print kopf(-type => 'application/json;charset=utf-8', -status => "200 OK");
 	print '{"status":"OK","error":0,"vorhanden":1,"datei":"' . json_text($datei)
 		. '","webserver":"' . json_text($ws) . '","port":"' . json_text($pt)
-		. '","port_gesetzt":' . ($pt ne '' ? 1 : 0) . '}';
+		. '","port_gesetzt":' . ($pt ne '' ? 1 : 0) . ',"netz":"' . json_text($netz) . '"}';
+	exit;
+}
+
+# Kodis Fernsteuerung aus dem Heimnetz (1.2.22, Entwurf Gruppe 10, 3.6, E4): <esallinterfaces> in der
+# advancedsettings.xml, die das Plugin beim Einspielen anlegt. value=1 (true) oder value=0 (false); NUR dieses
+# eine Element, sonst nichts. Ohne esallinterfaces lauscht Kodi auf JSON-RPC TCP 9090 und dem EventServer
+# UDP 9777 nur fuer den LoxBerry selbst. Wirkt erst nach einem Neustart von Kodi (Kodi liest die Datei beim Start).
+# Verweis-Schutz, Zwischendatei, Rechte, Eigentuemer und fsync wie bei den Addon-Einstellungen (addon_schreiben).
+# Steht das Element nicht GENAU EINMAL da (vom Anwender geaenderte Datei), wird nichts geschrieben.
+if ($action eq "advnetz") {
+	if ($value ne '0' && $value ne '1') {
+		print kopf(-type => 'application/json;charset=utf-8', -status => "400 Bad Request");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"invalid value\"}";
+		exit 1;
+	}
+	my $soll = ($value eq '1') ? 'true' : 'false';
+	my $datei;
+	my $adv_heim;
+	foreach my $h (@kodi_heim) {
+		my $d = "$h/.kodi/userdata/advancedsettings.xml";
+		if (-e $d) { $datei = $d; $adv_heim = $h; last; }
+	}
+	if (!defined $datei) {
+		print kopf(-type => 'application/json;charset=utf-8', -status => "404 Not Found");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"no advancedsettings.xml\"}";
+		exit 1;
+	}
+	my $adv_verweis = verweis_im_pfad($adv_heim, $datei);
+	if ($adv_verweis ne '') {
+		print STDERR "advnetz abgewiesen: $adv_verweis\n";
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"symlink in path\"}";
+		exit 1;
+	}
+	my ($inhalt, $adv_fehler) = datei_sicher_lesen($datei);
+	if (!defined $inhalt) {
+		print STDERR "advnetz abgewiesen: $adv_fehler\n";
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"file not readable\"}";
+		exit 1;
+	}
+	my @treffer = ($inhalt =~ m{<esallinterfaces>\s*(?:true|false)\s*</esallinterfaces>}gi);
+	if (scalar(@treffer) != 1) {
+		print kopf(-type => 'application/json;charset=utf-8', -status => "409 Conflict");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"esallinterfaces not found exactly once\"}";
+		exit 1;
+	}
+	my $neu = $inhalt;
+	$neu =~ s{<esallinterfaces>\s*(?:true|false)\s*</esallinterfaces>}{<esallinterfaces>$soll</esallinterfaces>}i;
+	if ($neu eq $inhalt) {
+		print kopf(-type => 'application/json;charset=utf-8', -status => "200 OK");
+		print '{"status":"OK","error":0,"geaendert":0,"netz":"' . $soll . '"}';
+		exit;
+	}
+	if (!addon_schreiben($datei, $neu, $adv_heim)) {
+		print kopf(-type => 'application/json;charset=utf-8', -status => "500 Error");
+		print "{\"status\": \"Error\", \"error\": 1, \"reason\": \"write failed\"}";
+		exit 1;
+	}
+	print kopf(-type => 'application/json;charset=utf-8', -status => "200 OK");
+	print '{"status":"OK","error":0,"geaendert":1,"netz":"' . $soll . '","datei":"' . json_text($datei) . '"}';
 	exit;
 }
 
@@ -546,7 +611,10 @@ sub replace_str_in_file
 		  or die "Could not open file for reading: '$filename': $!\n";
 
 		while (my $row = <$fh>) {
-			if (begins_with($row, $findstr)) {
+			# K8 (1.2.22): Leerraum am Zeilenanfang zaehlt nicht - bis 1.2.21 blieb "  decode_MPG2=alt" stehen,
+			# und dazu kam am Ende [all] mit einer zweiten Zeile (Probe k8.pl).
+			(my $r = $row) =~ s/^\s+//;
+			if (begins_with($r, $findstr)) {
 				$newfilestr .= "$replacestr\n";
 				$foundstr = 1;
 			} else {
@@ -582,8 +650,15 @@ sub replace_str_in_file
 			or die "Could not open file for writing: '$tmp': $!\n";
 		print $fh $newfilestr
 			or die "Could not write to '$tmp': $!\n";
+		# E6 (1.2.22): auf die Karte bringen, BEVOR umbenannt wird - der Kommentar oben verspricht Schutz gegen
+		# einen Stromausfall, und ohne fsync liegt der Inhalt nach rename womoeglich noch im Puffer.
+		$fh->flush
+			or die "Could not flush '$tmp': $!\n";
+		$fh->sync;
 		close($fh)
 			or die "Could not close '$tmp': $!\n";
+		# K8 (1.2.22): die Rechte der bisherigen Datei uebernehmen (bis 1.2.21 wurde 0600 zu 0644).
+		chmod((stat $filename)[2] & 07777, $tmp) if -e $filename;
 		rename($tmp, $filename)
 			or die "Could not replace '$filename': $!\n";
 
@@ -624,9 +699,11 @@ sub find_str_in_file
 		# Statussender). Sie gaben unter anderem die Seriennummer aus.
 		# Entfernt, ebenso die beiden in replace_str_in_file.
 		while (my $row = <$fh>) {
-			if (begins_with($row, $findstr)) {
-				chomp $row;
-				$strval = substr ($row, length($findstr));
+			# K8 (1.2.22): wie replace_str_in_file - eine eingerueckte Lizenz galt sonst als "nicht gesetzt".
+			(my $r = $row) =~ s/^\s+//;
+			if (begins_with($r, $findstr)) {
+				chomp $r;
+				$strval = substr ($r, length($findstr));
 				close $fh;
 				return($strval);
 			}
@@ -966,6 +1043,9 @@ sub addon_schreiben
 			chown($uid, $gid, $fh) or chown($uid, $gid, $tmp);
 		}
 		print $fh $inhalt or die "write '$tmp': $!\n";
+		# E6 (1.2.22): fsync vor dem Umbenennen.
+		$fh->flush or die "flush '$tmp': $!\n";
+		$fh->sync;
 		close($fh) or die "close '$tmp': $!\n";
 		rename($tmp, $datei) or die "rename to '$datei': $!\n";
 		1;

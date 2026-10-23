@@ -163,6 +163,18 @@ function ko_helfer_setzen($schluessel, $wert)
         : (isset($j['status']) ? (string) $j['status'] : '?');
 }
 
+/** Gruppe 10 (1.2.22, Entwurf 3.6, E4): Kodis Fernsteuerung aus dem Heimnetz (esallinterfaces in der
+ *  advancedsettings.xml des Plugins) ueber den Helfer setzen und die Antwort lesen. Rueckgabe: '' bei Erfolg,
+ *  sonst der Grund. Wirkt erst nach einem Neustart von Kodi. */
+function ko_netz_setzen($soll)
+{
+    $j = ko_helper_json('action=advnetz value=' . ((string) $soll === '1' ? '1' : '0'));
+    if (!is_array($j)) { return ko_t('MELDUNG.HELFER_STUMM'); }
+    if (isset($j['status']) && $j['status'] === 'OK') { return ''; }
+    return isset($j['reason']) ? (string) $j['reason']
+        : (isset($j['status']) ? (string) $j['status'] : '?');
+}
+
 $ko_saved = false;
 $ko_err = '';
 $ko_note = '';
@@ -227,9 +239,15 @@ if (ko_ist_post()) {
    Formular legte, bekaeme entweder keinen Upload oder einen Download, der das
    Speichern verschluckt. */
 
-if (ko_ist_post() && isset($_POST['vorlage'])) {
+/* 1.2.22 (Entscheidung 1, Entwurf Gruppe 10, 2.6/3.7): "mqtt" ist die Vorlage MQTT-Befehle (ko_vorlage_mqtt_out()),
+ * "vo" die TCP-Vorlage fuer bestehende Anlagen (byte-gleich). Die Eingangsvorlage (vorlage=1, VirtualInHttp)
+ * ist entfallen; ein solcher Aufruf faellt durch zur Seite. K18: vor header() jeden Ausgabepuffer leeren
+ * (Chromecast-Form) - sonst stuende eine Warnung aus einer eingebundenen Datei vor dem XML. */
+if (ko_ist_post() && isset($_POST['vorlage']) && is_string($_POST['vorlage'])
+    && in_array($_POST['vorlage'], array('vo', 'mqtt'), true)) {
     list($ko_vname, $ko_vinhalt) = ($_POST['vorlage'] === 'vo')
-        ? ko_vorlage_vo() : ko_vorlage();
+        ? ko_vorlage_vo() : ko_vorlage_mqtt_out();
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="' . $ko_vname . '"');
     header('Content-Length: ' . strlen($ko_vinhalt));
@@ -240,6 +258,7 @@ if (ko_ist_post() && isset($_POST['vorlage'])) {
 if (ko_ist_post() && isset($_POST['sichern'])) {
     // X-3: Kopfzeile _warnung mit den Namen, falls noetig (ko_warnkopf_setzen).
     $ko_txt = ko_warnkopf_setzen(ko_sicherung_text());
+    while (ob_get_level() > 0) { @ob_end_clean(); }   // K18 (1.2.22)
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="kodi_ng_einstellungen.txt"');
     header('Content-Length: ' . strlen($ko_txt));
@@ -279,6 +298,7 @@ if (ko_ist_post()) {
             } else {
                 $ko_meldungen = array();
                 $ko_cfg = ko_config();
+                $ko_netz_vorher = (string) $ko_cfg['fernsteuerung_netz_ein'];
                 foreach ($ko_neu['cfg'] as $ko_k => $ko_v) { $ko_cfg[$ko_k] = $ko_v; }
                 if (!ko_config_schreiben($ko_cfg)) {
                     $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
@@ -304,6 +324,14 @@ if (ko_ist_post()) {
                      * die Konfiguration beim naechsten Cron-Durchgang. */
                     $ko_meldungen[] = sprintf(ko_t('SICH.U_SENDER'),
                         (string) ko_config()['sender_ein'] === '1' ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'));
+                    /* 1.2.22 (Entwurf 3.6): hat die Sicherung die Fernsteuerung aus dem Heimnetz anders
+                     * gestellt, folgt die advancedsettings.xml ueber den Helfer (wirkt nach Kodi-Neustart). */
+                    if ((string) ko_config()['fernsteuerung_netz_ein'] !== $ko_netz_vorher) {
+                        $ko_grund = ko_netz_setzen(ko_config()['fernsteuerung_netz_ein']);
+                        $ko_meldungen[] = $ko_grund === ''
+                            ? ko_t((string) ko_config()['fernsteuerung_netz_ein'] === '1' ? 'LOX.M_NETZ_AUF' : 'LOX.M_NETZ_ZU')
+                            : sprintf(ko_t('LOX.M_NETZ_FEHL'), ko_e($ko_grund));
+                    }
 
                     /* Die Addon-Felder. Sie lassen sich nur schreiben, wenn
                      * Kodi steht - sonst schreibt Kodi beim Beenden seine
@@ -623,6 +651,22 @@ if (ko_ist_post()) {
             $ko_cfg['sender_ein'] = empty($_POST['sender_ein']) ? '0' : '1';
             $ko_felder['sender_ein'] = $ko_cfg['sender_ein'];
         }
+        /* 1.2.22 (Entwurf 3.5, E2): die beiden Haken der Befehlsbruecke (hat_*-Muster wie sender_ein). */
+        foreach (array('befehle_mqtt_ein', 'befehle_mqtt_steuern') as $ko_k) {
+            if (empty($_POST['hat_' . $ko_k])) { continue; }
+            $ko_cfg[$ko_k] = empty($_POST[$ko_k]) ? '0' : '1';
+            $ko_felder[$ko_k] = $ko_cfg[$ko_k];
+        }
+        /* Eigener Fund F4: mit "Befehle ueber MQTT annehmen" muss das Praefix auch fuer die Bruecke gelten
+         * (je Ebene nur Buchstaben, Ziffern, _ und -; kein Punkt). Sonst Beanstandung, nichts gespeichert
+         * (Entscheidung 16). Das Werte-Praefix allein bleibt mit Punkt erlaubt. */
+        if ((string) $ko_cfg['befehle_mqtt_ein'] === '1' && !in_array('mqtt_topic', $ko_falsch, true)) {
+            ko_bruecke_laden();
+            if (!ko_praefix_befehle_gueltig(ko_praefix($ko_cfg))) {
+                $ko_mangel[] = sprintf(ko_t('BEFEHL.M_PRAEFIX'), ko_e(ko_praefix($ko_cfg)));
+                $ko_falsch[] = 'mqtt_topic';
+            }
+        }
         if ($ko_mangel) {
             $ko_beanstandungen = $ko_mangel;
             $ko_eingaben_neu = array('formular' => 'mqtt', 'felder' => $ko_felder,
@@ -668,10 +712,38 @@ if (ko_ist_post()) {
                     $ko_err = $ko_err !== '' ? $ko_err . ' ' . $ko_leer_text : $ko_leer_text;
                 }
             }
+            /* 1.2.22 (Entwurf 3.5): die Bruecke sofort starten bzw. anhalten (sonst der Waechter in cron.01min
+             * binnen 60 s); bei gewechseltem Praefix neu starten (neues Abo). */
+            $ko_bs = ko_bruecke_satz(ko_bruecke_schalten($ko_praefix_neu !== $ko_praefix_vorher));
+            if ($ko_bs !== '') { $ko_note = $ko_note !== '' ? $ko_note . ' ' . $ko_bs : $ko_bs; }
         } else {
             $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
         }
         $ko_tab = 'tab-mqtt';
+    }
+
+    /* ============ Kodis Fernsteuerung aus dem Heimnetz (1.2.22, Entwurf 3.6, E4) ============
+     * Erst speichern, dann der Helfer (advnetz) - und seine Antwort lesen. Scheitert er, ist der Haken
+     * gespeichert, und postroot.sh setzt den Wert beim naechsten Einspielen. Wirkt nach Kodis Neustart. */
+    if (isset($_POST['netz_save'])) {
+        $ko_tab = 'tab-loxone';
+        if (!empty($_POST['hat_fernsteuerung_netz_ein'])) {
+            $ko_cfg = ko_config();
+            $ko_cfg['fernsteuerung_netz_ein'] = empty($_POST['fernsteuerung_netz_ein']) ? '0' : '1';
+            if (!ko_config_schreiben($ko_cfg)) {
+                $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
+            } else {
+                $ko_saved = true;
+                ko_config(true);
+                ko_log('Fernsteuerung aus dem Heimnetz: ' . $ko_cfg['fernsteuerung_netz_ein'] . ' gespeichert.');
+                $ko_grund = ko_netz_setzen($ko_cfg['fernsteuerung_netz_ein']);
+                if ($ko_grund === '') {
+                    $ko_note = ko_t($ko_cfg['fernsteuerung_netz_ein'] === '1' ? 'LOX.M_NETZ_AUF' : 'LOX.M_NETZ_ZU');
+                } else {
+                    $ko_err = sprintf(ko_t('LOX.M_NETZ_FEHL'), ko_e($ko_grund));
+                }
+            }
+        }
     }
 
     /* ============ Die Addon-Einstellungen setzen ============ */
@@ -917,7 +989,9 @@ $ko_abo_nein = sprintf(ko_t('MQTT.ABO_DATEI_NEIN'), '<span class="sm-mono">' . k
 $ko_p    = ko_paths();
 
 $ko_frame = class_exists('LBWeb', false);
-if ($ko_frame) { LBWeb::lbheader(ko_t('ALLG.TITEL'), 'https://wiki.loxberry.de/', 'help.html'); }
+/* K18 (1.2.22): der Hilfelink zeigt auf die Plugin-Seite im LoxBerry-Wiki (am 01.10.2026 angelegt, am 23.10.
+ * geoeffnet: "Kodi NG"), nicht mehr auf die Startseite. */
+if ($ko_frame) { LBWeb::lbheader(ko_t('ALLG.TITEL'), 'https://wiki.loxberry.de/plugins/kodi_ng/start', 'help.html'); }
 /* NICHT hier maskieren: beide Verwendungsstellen schicken den Wert ohnehin
  * durch ko_e(). Doppelt maskiert stand ohne Host-Kopfzeile woertlich
  * "tcp://&lt;loxberry-ip&gt;:9090" auf dem Bildschirm - gemessen. */
@@ -1273,7 +1347,9 @@ if ($ko_altwerte) {
  * Zurueckspielen abgewiesen (etwa wegen eines Addon-Felds des Plugins),
  * steht es hier - mit den Namen, nie den Werten. Dieselbe Pruefung wie beim
  * Zurueckspielen (ko_rueckspiel_befund). */
-$ko_rsb = ko_rueckspiel_befund();
+/* K17 (1.2.22): ko_rueckspiel_befund() liest ueber ko_sicherung_text() die Addon-Einstellungen (sudo, addonread) -
+ * nur, wenn dieser Reiter serverseitig offen ist; er ist der Standardreiter. */
+$ko_rsb = $ko_tab === 'tab-settings' ? ko_rueckspiel_befund() : array();
 if ($ko_rsb) { ?>
 <div class="sm-warnung"><?= sprintf(ko_t('SICH.RUECKSPIEL_ABGEWIESEN'), ko_e(implode(', ', $ko_rsb))) ?></div>
 <?php } ?>
@@ -1353,6 +1429,26 @@ if ($ko_gw === null) { ?>
     <input data-role="none" type="number" id="ko_takt" name="sender_takt" value="<?= ko_e(ko_feld('mqtt', 'sender_takt', (int) $ko_cfg['sender_takt'])) ?>"<?= ko_falsch('mqtt', 'sender_takt') ?>>
     <div class="sm-hilfe"><?= ko_t('EINST.H_TAKT') ?></div>
 </div>
+<?php /* Gruppe 10 (1.2.22; Entwurf 3.5, E2/E3): die Haken der Befehlsbruecke im Formular des Reiters MQTT, beide ab
+   Werk aus. Speichern startet bzw. haelt die Bruecke sofort (ko_bruecke_schalten()); mit "annehmen" verlangt das
+   Speichern ein Praefix ohne Punkt (eigener Fund F4). */ ?>
+<h3><?= ko_e(ko_t('BEFEHL.H')) ?></h3>
+<div class="sm-hinweis"><?= sprintf(ko_t('BEFEHL.TEXT'), '<span class="sm-mono">' . ko_e(ko_praefix($ko_cfg) . '/befehl/#') . '</span>') ?></div>
+<div class="sm-feld">
+    <input data-role="none" type="hidden" name="hat_befehle_mqtt_ein" value="1">
+    <label><input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1"
+        <?= ko_feld('mqtt', 'befehle_mqtt_ein', $ko_cfg['befehle_mqtt_ein']) === '1' ? 'checked' : '' ?>>
+        <?= ko_e(ko_t('BEFEHL.L_EIN')) ?></label>
+    <div class="sm-hilfe"><?= ko_t('BEFEHL.H_EIN') ?></div>
+</div>
+<div class="sm-feld">
+    <input data-role="none" type="hidden" name="hat_befehle_mqtt_steuern" value="1">
+    <label><input data-role="none" type="checkbox" name="befehle_mqtt_steuern" value="1"
+        <?= ko_feld('mqtt', 'befehle_mqtt_steuern', $ko_cfg['befehle_mqtt_steuern']) === '1' ? 'checked' : '' ?>>
+        <?= ko_e(ko_t('BEFEHL.L_STEUERN')) ?></label>
+    <div class="sm-hilfe"><?= ko_t('BEFEHL.H_STEUERN') ?></div>
+</div>
+<div class="sm-warnung"><?= ko_t('BEFEHL.HEIMNETZ') ?></div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ko_e(ko_t('ALLG.SPEICHERN')) ?></button>
 </div>
@@ -1373,18 +1469,21 @@ if ($ko_gw === null) { ?>
 
 <h2><?= ko_e(ko_t('LOX.H_THEMEN')) ?></h2>
 <div class="sm-hilfe"><?= ko_t('LOX.THEMEN_HINWEIS') ?></div>
+<?php /* Gruppe 10 (1.2.22, Entwurf 2.4): die Tabelle kommt aus ko_mqtt_namen() - derselben Quelle wie die
+       Namenstabelle im Reiter Einbindung und die Pruefzeile im Reiter Test; dazu status/befehle der Bruecke. Bis
+       1.2.21 stand hier die Spalte "in der Vorlage" (die Eingangsvorlage ist entfallen, Entscheidung 1). */ ?>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th><?= ko_e(ko_t('LOX.TH_THEMA')) ?></th><th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th>
+<tr><th><?= ko_e(ko_t('LOX.TH_THEMA')) ?></th><th><?= ko_e(ko_t('LOX.TH_NAME')) ?></th><th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th>
     <th><?= ko_e(ko_t('LOX.TH_WERTE')) ?></th><th><?= ko_e(ko_t('LOX.TH_QUELLE')) ?></th>
-    <th><?= ko_e(ko_t('LOX.TH_RETAIN')) ?></th><th><?= ko_e(ko_t('LOX.TH_VORLAGE')) ?></th></tr>
-<?php foreach (ko_themen() as $ko_th) { ?>
-<tr><td class="sm-mono"><?= ko_e($ko_cfg['mqtt_topic'] . '/' . $ko_th['name']) ?></td>
-    <td><?= ko_t('THEMA.' . $ko_th['schl']) ?></td>
-    <td><?= ko_t('THEMA.' . $ko_th['wschl']) ?></td>
-    <td><?= ko_e($ko_th['quelle'] === 'plugin' ? ko_t('LOX.Q_PLUGIN') : ko_t('LOX.Q_ADDON')) ?></td>
-    <td><?= !empty($ko_th['retain']) ? ko_e(ko_t('ALLG.JA')) : ko_e(ko_t('ALLG.NEIN')) ?></td>
-    <td><?= ko_thema_in_vorlage($ko_th, $ko_cfg) ? '<span class="sm-an">&#10004;</span>' : '&ndash;' ?></td></tr>
+    <th><?= ko_e(ko_t('LOX.TH_RETAIN')) ?></th><th><?= ko_e(ko_t('LOX.TH_MUSTER')) ?></th></tr>
+<?php foreach (ko_mqtt_namen($ko_cfg) as $ko_nz) { ?>
+<tr><td class="sm-mono"><?= ko_e($ko_nz['voll']) ?></td><td class="sm-mono"><?= ko_e($ko_nz['name']) ?></td>
+    <td><?= ko_t('THEMA.' . $ko_nz['schl']) ?></td>
+    <td><?= ko_t('THEMA.' . $ko_nz['wschl']) ?></td>
+    <td><?= ko_e(ko_t($ko_nz['quelle'] === 'plugin' ? 'LOX.Q_PLUGIN' : ($ko_nz['quelle'] === 'addon' ? 'LOX.Q_ADDON' : 'LOX.Q_BRUECKE'))) ?></td>
+    <td><?= $ko_nz['retained'] ? ko_e(ko_t('ALLG.JA')) : ko_e(ko_t('ALLG.NEIN')) ?></td>
+    <td><?= $ko_nz['muster'] ? ko_e(ko_t($ko_nz['v2'] === 'N' ? 'LOX.V2_N' : 'LOX.V2_HAKEN')) : '&ndash;' ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -1396,6 +1495,9 @@ if ($ko_gw === null) { ?>
 <h2><?= ko_e(ko_t('ADDON.H')) ?></h2>
 <div class="sm-hinweis"><?= ko_t('ADDON.TEXT') ?></div>
 <?php
+/* K17 (1.2.22): die Addon-Tabelle fragt den Helfer (sudo, Perl als root, Frist 15 s) - nur, wenn dieser Reiter
+ * SERVERSEITIG offen ist (Bauart Reiter Test). Bis 1.2.21 lief addonread bei jedem Klick in jedem Reiter. */
+if ($ko_tab === 'tab-mqtt') {
 $ko_addon = ko_addon_lesen();
 $ko_soll  = ko_addon_soll();
 ?>
@@ -1443,6 +1545,9 @@ if ($ko_thema_ab) { ?>
 <?php } ?>
 </div>
 </form>
+<?php } else { ?>
+<div class="sm-hinweis"><?= sprintf(ko_t('ADDON.NACHLADEN'), 'index.php?form=mqtt') ?></div>
+<?php } ?>
 </div>
 
 <!-- ================= Einbindung in Loxone ================= -->
@@ -1452,9 +1557,27 @@ if ($ko_thema_ab) { ?>
      keine Gegenprobe. Die Themen-Tabelle steht seit 1.2.7 im Reiter MQTT. -->
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-technik"></i> <?= ko_e(ko_t('LEGENDE.TECHNIK')) ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= ko_e(ko_t('LEGENDE.AKTION')) ?></span>
 </div>
 
 <h2><?= ko_e(ko_t('LOX.H')) ?></h2>
+<?php /* Gruppe 10 (1.2.22; Entwurf 2.5, 3.6, 3.7; E1-E9): MQTT ist der Weg des Musterprojekts fuer Werte UND
+   Befehle. Schritt 1 die Werte am Gateway (V1: das Abo fuehrt das Plugin selbst in mqtt_subscriptions.cfg nach; V2:
+   Hakenliste mit Noncached), Schritt 2 die Namenstabelle (ko_mqtt_namen(); die Eingangsvorlage mit dem
+   VirtualInHttp-Kunstgriff ist entfallen, Entscheidung 1), Schritt 3 die 26 Befehle ueber die Befehlsbruecke mit der
+   Vorlage "MQTT-Befehle". Der direkte Weg tcp://...:9090 steht zugeklappt darunter - fuer bestehende Anlagen und
+   Fremdsysteme, mit dem Haken "Kodis Fernsteuerung aus dem Heimnetz zulassen" (E4, ab Werk an). */
+$ko_ln = ko_mqtt_namen($ko_cfg);
+$ko_lpr = ko_praefix($ko_cfg);
+$ko_bzl = ko_mqtt_befehl_zeilen($ko_cfg);
+$ko_bsp = array();
+list($ko_bzo) = ko_bb_zuordnung();
+if (is_array($ko_bzo)) {
+    foreach ($ko_bzo['befehle'] as $ko_bn => $ko_bx) { $ko_bsp[$ko_bn] = isset($ko_bx['sperre_s']) ? (int) $ko_bx['sperre_s'] : 60; }
+}
+$ko_desc = array('dienst', 'autostart', 'erreichbar', 'zeitstempel', 'herzschlag', 'status/ok', 'status/zaehler', 'status/ts');
+?>
+<div class="sm-hinweis"><?= ko_t('LOX.S0') ?></div>
 <?php if ((string) $ko_cfg['sender_ein'] !== '1') { ?>
 <div class="sm-warnung"><?= sprintf(ko_t('LOX.SENDER_AUS'), ko_themen_plugin_zahl($ko_cfg)) ?></div>
 <?php } ?>
@@ -1462,32 +1585,13 @@ if ($ko_thema_ab) { ?>
 <h3><?= ko_e(ko_t('LOX.S1')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.SCHRITT1'),
     '<b>' . ($ko_port ? ko_e($ko_port) : ko_e(ko_t('LOX.NICHT_GESETZT'))) . '</b>') ?></div>
-
-<h3><?= ko_e(ko_t('LOX.S2')) ?></h3>
+<div class="sm-step"><?= ko_t('LOX.S1_SENDER') ?></div>
 <div class="sm-step"><?= sprintf(ko_t('LOX.SCHRITT2'),
     '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/</span>') ?></div>
 <?php
-/* Was hier steht, haengt von der FASSUNG des MQTT-Gateways ab.
- *
- * Der Satz "Ohne diesen Eintrag kommt am Miniserver nichts an" gilt fuer V1.
- * Unter V2 schaltet der LoxBerry-Kern auf der Abonnement-Seite die Knoepfe ab
- * (mqtt-gateway.cgi, FORM_DISABLE_BUTTONS) - dort ist gar nichts mehr
- * einzutragen, und der unbedingte Satz schickte jeden V2-Anwender zu einem
- * Eingabefeld, das es nicht gibt.
- *
- * Ist die Fassung nicht lesbar, stehen BEIDE Saetze da. Einen von beiden zu
- * behaupten waere fuer die Haelfte der Anlagen falsch - und das in genau der
- * Zeile, die als haeufigste Fehlerursache gilt.
- *
- * Regel daraus: Der Satz zur Gateway-Fassung steht an GENAU EINER Stelle je
- * Fassung, und alles, was von ihr abhaengt, steht IM SELBEN Zweig. Die
- * Pruefzeile "Aussagen zur Gateway-Fassung" im Reiter Test zaehlt nach, ob
- * der V1-Satz ausserhalb seines Schluessels noch irgendwo auftaucht.
- *
- * Gemessen am 17.09.2026 im Quelltext des Geraets (LoxBerry 4.0.0.15,
- * sbin/mqtt_gateway.py): auch Gateway V2 lauscht IMMER auf Mqtt.Udpinport und
- * versteht publish und retain. Der Sendeweg dieses Plugins ist unter beiden
- * Fassungen derselbe; verschieden ist nur, was in den Abonnements zu tun ist. */
+/* Was hier steht, haengt von der FASSUNG des MQTT-Gateways ab (seit 1.2.7, unveraendert uebernommen): unter V1 legt
+ * das Plugin das Abo selbst in seine Abodatei, unter V2 werden die Datenpunkte angehakt. Ist die Fassung nicht
+ * lesbar, stehen BEIDE Saetze da. */
 if ($ko_gwf >= 2) { ?>
 <div class="sm-hinweis"><?= ko_t('LOX.ABO_V2') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V2') ?></div>
@@ -1514,41 +1618,95 @@ if ($ko_gwf >= 2) { ?>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V1') ?></div>
 <div class="sm-step"><?= ko_t('LOX.SCHRITT3_V2') ?></div>
 <?php } ?>
-
-<h3><?= ko_e(ko_t('LOX.S3')) ?></h3>
-<?php
-$ko_vi = array();
-$ko_text_zahl = 0;
-foreach (ko_themen() as $ko_th) {
-    if ($ko_th['quelle'] !== 'plugin') { continue; }
-    if (ko_thema_in_vorlage($ko_th, $ko_cfg)) { $ko_vi[] = $ko_th; }
-    elseif (empty($ko_th['zahl'])) { $ko_text_zahl++; }
-}
-?>
-<div class="sm-step"><?= sprintf(ko_t('LOX.S3_TEXT'), count($ko_vi), $ko_text_zahl) ?></div>
+<div class="sm-step"><?= ko_t('LOX.S1_V2_LISTE') ?>
 <div class="sm-breit">
-<table class="sm-tbl">
-<tr><th><?= ko_e(ko_t('LOX.TH_EINGANG')) ?></th><th><?= ko_e(ko_t('LOX.TH_WERTE')) ?></th>
-    <th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th><th><?= ko_e(ko_t('LOX.TH_RETAIN')) ?></th></tr>
-<?php foreach ($ko_vi as $ko_th) { ?>
-<tr><td class="sm-mono"><?= ko_e(str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $ko_th['name'])) ?></td>
-    <td><?= ko_t('THEMA.' . $ko_th['wschl']) ?></td>
-    <td><?= ko_t('THEMA.' . $ko_th['schl']) ?></td>
-    <td><?= !empty($ko_th['retain']) ? ko_e(ko_t('ALLG.JA')) : ko_e(ko_t('ALLG.NEIN')) ?></td></tr>
+<table class="sm-tbl" id="ko_hakenliste">
+<tr><th>#</th><th><?= ko_e(ko_t('LOX.TH_NAME')) ?></th><th><?= ko_e(ko_t('LOX.TH_ART')) ?></th><th><?= ko_e(ko_t('LOX.TH_V2')) ?></th></tr>
+<?php foreach (ko_mqtt_hakenliste() as $ko_hi => $ko_hz) { ?>
+<tr><td><?= (int) $ko_hi + 1 ?></td><td class="sm-mono"><?= ko_e(ko_vi_name($ko_hz[0], $ko_cfg)) ?></td>
+    <td><?= ko_e(ko_t($ko_hz[1] === 'text' ? 'LOX.ART_TEXT' : 'LOX.ART_ZAHL')) ?></td>
+    <td><?= ko_e(ko_t($ko_hz[2] === 'N' ? 'LOX.V2_N' : 'LOX.V2_HAKEN')) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-hinweis"><?= ko_t('LOX.H_VORLAGE_TEXT') ?></div>
+<div class="sm-hilfe"><?= ko_t('LOX.S1_RECONNECT') ?></div>
+</div>
+
+<h3><?= ko_e(ko_t('LOX.S2')) ?></h3>
+<div class="sm-step"><?= ko_t('LOX.S2_TEXT') ?></div>
+<div class="sm-breit">
+<table class="sm-tbl" id="ko_namenstabelle">
+<tr><th><?= ko_e(ko_t('LOX.TH_THEMA')) ?></th><th><?= ko_e(ko_t('LOX.TH_NAME')) ?></th><th><?= ko_e(ko_t('LOX.TH_DESC')) ?></th>
+    <th><?= ko_e(ko_t('LOX.TH_ART')) ?></th><th><?= ko_e(ko_t('LOX.TH_V2')) ?></th><th><?= ko_e(ko_t('LOX.TH_BEDEUTUNG')) ?></th></tr>
+<?php foreach ($ko_ln as $ko_nz) { ?>
+<tr><td class="sm-mono"><?= ko_e($ko_nz['voll']) ?></td>
+    <td><span class="sm-mono"><?= ko_e($ko_nz['name']) ?></span> <button data-role="none" type="button" class="sm-kopie" data-kopie="<?= ko_e($ko_nz['name']) ?>"><?= ko_e(ko_t('LOX.KOPIEREN')) ?></button></td>
+    <td><?= in_array($ko_nz['thema'], $ko_desc, true) ? ko_e(ko_t('VIBESCH.' . strtoupper(str_replace('/', '_', $ko_nz['thema'])))) : '&ndash;' ?></td>
+    <td><?= ko_e(ko_t($ko_nz['art'] === 'text' ? 'LOX.ART_TEXT' : 'LOX.ART_ZAHL')) ?></td>
+    <td><?= $ko_nz['muster'] ? ko_e(ko_t($ko_nz['v2'] === 'N' ? 'LOX.V2_N' : 'LOX.V2_HAKEN')) : '&ndash;' ?></td>
+    <td><?= ko_t('THEMA.' . $ko_nz['schl']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-hilfe"><?= ko_t('LOX.S2_RECHTE') ?></div>
+<div class="sm-hilfe"><?= ko_t('LOX.S2_PRAEFIX') ?></div>
+<script>
+(function () {
+    var k = document.querySelectorAll('#ko_namenstabelle .sm-kopie');
+    for (var i = 0; i < k.length; i++) {
+        k[i].addEventListener('click', function () {
+            var b = this, n = b.getAttribute('data-kopie');
+            var fertig = function () { b.textContent = <?= json_encode(ko_t('LOX.KOPIERT')) ?>; };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(n).then(fertig);
+            } else {
+                var f = document.createElement('textarea');
+                f.value = n; document.body.appendChild(f); f.select();
+                try { document.execCommand('copy'); fertig(); } catch (e) {}
+                document.body.removeChild(f);
+            }
+        });
+    }
+})();
+</script>
+
+<h3><?= ko_e(ko_t('LOX.S3')) ?></h3>
+<div class="sm-step"><?= sprintf(ko_t('LOX.S3_TEXT'), '<span class="sm-mono">' . ko_e($ko_lpr . '/befehl/#') . '</span>') ?></div>
+<?php if ((string) $ko_cfg['befehle_mqtt_ein'] !== '1') { ?>
+<div class="sm-warnung"><?= ko_t('LOX.S3_HAKEN_AUS') ?></div>
+<?php } elseif ((string) $ko_cfg['befehle_mqtt_steuern'] !== '1') { ?>
+<div class="sm-hinweis"><?= ko_t('LOX.S3_STEUERN_AUS') ?></div>
+<?php } ?>
+<?php if (!ko_praefix_befehle_gueltig($ko_lpr)) { ?>
+<div class="sm-warnung"><?= sprintf(ko_t('LOX.S3_PRAEFIX'), '<span class="sm-mono">' . ko_e($ko_lpr) . '</span>') ?></div>
+<?php } ?>
+<div class="sm-breit">
+<table class="sm-tbl" id="ko_befehle">
+<tr><th><?= ko_e(ko_t('BEFEHL.T_TITEL')) ?></th><th><?= ko_e(ko_t('BEFEHL.T_THEMA')) ?></th><th><?= ko_e(ko_t('BEFEHL.T_EINGREIFEND')) ?></th><th><?= ko_e(ko_t('BEFEHL.T_SPERRE')) ?></th></tr>
+<?php foreach ($ko_bzl as $ko_bz) { ?>
+<tr><td><?= ko_e($ko_bz['titel']) ?></td><td class="sm-mono"><?= ko_e('publish ' . $ko_bz['thema'] . ' 1') ?></td>
+    <td><?= ko_e(ko_t($ko_bz['eingreifend'] ? 'BEFEHL.T_JA_ZWEITER' : 'BEFEHL.T_NEIN')) ?></td>
+    <td><?= isset($ko_bsp[$ko_bz['name']]) ? (int) $ko_bsp[$ko_bz['name']] . ' s' : '?' ?></td></tr>
+<?php } ?>
+</table>
+</div>
 <div class="sm-knopfreihe">
 <form action="index.php" method="post">
   <?= ko_fmt() ?>
-  <input data-role="none" type="hidden" name="vorlage" value="1">
+  <input data-role="none" type="hidden" name="vorlage" value="mqtt">
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-  <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= ko_e(ko_t('LOX.K_VORLAGE')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= ko_e(ko_t('LOX.K_VORLAGE_MQTT')) ?></button>
 </form>
 </div>
+<div class="sm-hilfe"><?= sprintf(ko_t('LOX.S3_VORLAGE'), count($ko_bzl),
+    '<span class="sm-mono">' . ko_e('/dev/udp/' . ko_udp_wirt() . '/' . ($ko_port ? (int) $ko_port : 11884)) . '</span>') ?></div>
+<div class="sm-hilfe"><?= ko_t('LOX.S3_NICHTS') ?></div>
+<div class="sm-warnung"><?= ko_t('BEFEHL.HEIMNETZ') ?></div>
+<div class="sm-hilfe"><?= sprintf(ko_t('BEFEHL.QUITTUNG'), '<span class="sm-mono">' . ko_e($ko_lpr . '/befehl/<name>/quittung') . '</span>') ?></div>
 
-<h3><?= ko_e(ko_t('LOX.S4')) ?></h3>
+<details class="sm-step" id="ko_tcp">
+<summary><b><?= ko_e(ko_t('LOX.S4')) ?></b></summary>
+<div class="sm-hilfe"><?= ko_t('LOX.S4_MUSTER') ?></div>
 <div class="sm-step"><?= ko_t('LOX.STEUERN_TEXT') ?></div>
 <div class="sm-step sm-mono">tcp://<?= ko_e(ko_steuer_wirt()) ?>:9090</div>
 <div class="sm-hilfe"><?= ko_t('LOX.ADRESSE_PRUEFEN') ?></div>
@@ -1561,82 +1719,60 @@ foreach (ko_themen() as $ko_th) {
 </form>
 </div>
 <div class="sm-hilfe"><?= sprintf(ko_t('LOX.VORLAGE_HINWEIS'), count(ko_vo_befehle())) ?></div>
+<form action="index.php" method="post">
+<?= ko_fmt() ?>
+<input data-role="none" type="hidden" name="netz_save" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<div class="sm-feld">
+    <input data-role="none" type="hidden" name="hat_fernsteuerung_netz_ein" value="1">
+    <label><input data-role="none" type="checkbox" name="fernsteuerung_netz_ein" value="1"
+        <?= (string) $ko_cfg['fernsteuerung_netz_ein'] === '1' ? 'checked' : '' ?>>
+        <?= ko_e(ko_t('LOX.L_NETZ')) ?></label>
+    <div class="sm-hilfe"><?= ko_t('LOX.H_NETZ') ?></div>
+</div>
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= ko_e(ko_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
+<?php list(, $ko_vo_xml) = ko_vorlage_vo(); preg_match('/<VirtualOut\s[^>]*Title="([^"]*)"/', $ko_vo_xml, $ko_vo_m); ?>
+<div class="sm-hilfe"><?= ko_e(sprintf(ko_t('BAUSTEIN.BEF_TITEL'), isset($ko_vo_m[1]) ? html_entity_decode($ko_vo_m[1], ENT_QUOTES | ENT_XML1, 'UTF-8') : '?')) ?></div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= ko_e(ko_t('BAUSTEIN.BEF_SP_BEFEHL')) ?></th><th><?= ko_e(ko_t('BAUSTEIN.BEF_SP_BEDEUTUNG')) ?></th></tr>
+<?php foreach (ko_vo_befehle() as $ko_c) { ?>
+<tr><td class="sm-mono"><?= ko_e($ko_c[0]) ?></td><td><?= ko_e(ko_t('VOBEF.' . $ko_c[1])) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-hilfe"><?= ko_e(ko_t('BAUSTEIN.BEF_UNTERSCHRIFT')) ?></div>
+</details>
 
 <h3><?= ko_e(ko_t('LOX.S5')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.S5_TEXT'),
-    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/zeitstempel</span>',
-    '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/herzschlag</span>',
+    '<span class="sm-mono">' . ko_e(ko_praefix($ko_cfg)) . '/status/zaehler</span>',
+    '<span class="sm-mono">' . ko_e(ko_praefix($ko_cfg)) . '/status/ts</span>',
     '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/status/ok</span>') ?></div>
 
 <h3><?= ko_e(ko_t('LOX.S6')) ?></h3>
 <?php
-/* X-8 (02.10.2026, Entscheidung 36): EINE Liste fuer alles, was die beiden
- * Vorlagen anlegen, und die Logik dazu. Titel, Adressen, Anzeigenamen und
- * Grenzen kommen aus DEMSELBEN XML, das die Knoepfe in Schritt 3 und 4
- * erzeugen (ko_vorlage(), ko_vorlage_vo()); die Befehle aus ko_vo_befehle().
- * Die Texte stehen in [BAUSTEIN]; kein UND/ODER mit mehr als zwei Eingaengen
- * (Regeln/04). Seit 1.2.19 drei Listen, siehe unten.
- * $ko_vn bleibt: Schritt 7 nennt damit den Eingang herzschlag. */
+/* Gruppe 10 (1.2.22, Entwurf Abschnitt 9; E11): drei Seiten aus dem LoxBerry-Plugins Musterprojekt, wortgleich zu den
+ * neuen Listenabschnitten "Kodi-NG" (28), "Kodi-NG Fernbedienung" (24), "Kodi-NG Wiedergabe" (38). Die Eingaenge sind
+ * Virtuelle Eingaenge mit dem Namen, den das MQTT-Gateway vergibt (ko_vi_name(), dieselbe Stelle wie die
+ * Namenstabelle); die 26 Befehle haengen am gemeinsamen Ausgang "LoxBerry MQTT-Gateway" und senden
+ * "publish <praefix>/befehl/<name> 1" (ko_mqtt_befehl_zeilen(), dieselbe Quelle wie Tabelle und Vorlage in
+ * Schritt 3). Bis 1.2.21 kamen Namen und Titel aus den beiden Vorlagen ko_vorlage() (entfallen) und ko_vorlage_vo()
+ * (bleibt fuer bestehende Anlagen). Texte aus [BAUSTEIN]; jede Zelle ist fertiges, maskiertes HTML.
+ * Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
 $ko_vn = function ($name) use ($ko_cfg) {
-    return '<span class="sm-mono">' . ko_e(str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name)) . '</span>';
-};
-$ko_bs_attr = function ($xml, $tag) {
-    preg_match_all('/<' . $tag . '\s([^>]*?)\/?>/', $xml, $ko_m);
-    $ko_aus = array();
-    foreach ($ko_m[1] as $ko_roh) {
-        preg_match_all('/(\w+)="([^"]*)"/', $ko_roh, $ko_a);
-        $ko_z = array();
-        foreach ($ko_a[1] as $ko_j => $ko_k) {
-            $ko_z[$ko_k] = html_entity_decode($ko_a[2][$ko_j], ENT_QUOTES | ENT_XML1, 'UTF-8');
-        }
-        $ko_aus[] = $ko_z;
-    }
-    return $ko_aus;
+    return '<span class="sm-mono">' . ko_e(ko_vi_name($name, $ko_cfg)) . '</span>';
 };
 $ko_bs_mono = function ($s) { return '<span class="sm-mono">' . ko_e($s) . '</span>'; };
 $ko_bs_t = function ($s) { return ko_t('BAUSTEIN.' . $s); };
-list($ko_vi_datei, $ko_vi_xml) = ko_vorlage();
-list($ko_vo_datei, $ko_vo_xml) = ko_vorlage_vo();
-$ko_vi_kopf = $ko_bs_attr($ko_vi_xml, 'VirtualInHttp');
-$ko_vi_kopf = $ko_vi_kopf ? $ko_vi_kopf[0] : array('Title' => '', 'Address' => '', 'PollingTime' => '');
-$ko_vo_kopf = $ko_bs_attr($ko_vo_xml, 'VirtualOut');
-$ko_vo_kopf = $ko_vo_kopf ? $ko_vo_kopf[0] : array('Title' => '', 'Address' => '');
-/* Die Eingaenge in DERSELBEN Reihenfolge wie in ko_vorlage(): ko_themen(),
- * gefiltert mit ko_thema_in_vorlage(). Daraus die Kennung {F:NAME}. */
-$ko_bs_th = array();
-foreach (ko_themen() as $ko_th) {
-    if (ko_thema_in_vorlage($ko_th, $ko_cfg)) { $ko_bs_th[] = $ko_th; }
-}
-/* Welle Bild 11 VOLL (1.2.19, Hausherr 11.10.2026: Vollausstattung, ein absoluter Laie soll
- * das Maximum leicht uebernehmen koennen): drei Seiten aus dem LoxBerry-Plugins Musterprojekt,
- * dort in Loxone Config gebaut und mit leitungen_setzen.py verbunden
- * (Musterprojekt/baustein_listen.txt, Abschnitte "Kodi-NG" 28, "Kodi-NG Fernbedienung" 24,
- * "Kodi-NG Wiedergabe" 38 Zeilen). Je Seite: Ueberschrift, Kasten "So uebernehmen Sie diese
- * Seite", Tabelle, Hinweise, Bild, Link - alle immer sichtbar. Bis 1.2.18 stand hier eine Seite
- * mit 13 Zeilen.
- * Die Namen der Eingaenge kommen wie bisher aus DEMSELBEN XML wie der Knopf in Schritt 3
- * (ko_vorlage()); legt die Vorlage einen Eingang nicht an (erreichbar ohne Haken JSON-RPC),
- * steht der Name, den das Gateway vergibt. Die Befehlsnamen kommen aus ko_vo_befehle(), ihr
- * Parameter ist ihr Anzeigename aus [VOBEF]; die Vorlagentitel aus den XML-Koepfen. Die
- * Virtuellen Texteingaenge legt keine Vorlage an (Regeln/07); ihr Name ist der Gateway-Name.
- * Texte aus [BAUSTEIN]; jede Zelle ist fertiges, maskiertes HTML.
- * Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
-$ko_vi_titel = array();
-foreach ($ko_bs_attr($ko_vi_xml, 'VirtualInHttpCmd') as $ko_i => $ko_c) {
-    if (isset($ko_bs_th[$ko_i])) { $ko_vi_titel[$ko_bs_th[$ko_i]['name']] = $ko_c['Title']; }
-}
-$ko_bs_tx = function ($name) use ($ko_cfg) {
-    return str_replace('/', '_', $ko_cfg['mqtt_topic'] . '_' . $name);
-};
-$ko_bs_gw = function ($name) use ($ko_vi_titel, $ko_bs_tx) {
-    return isset($ko_vi_titel[$name]) ? $ko_vi_titel[$name] : $ko_bs_tx($name);
-};
-$ko_bs_vo_titel = array();
-foreach (ko_vo_befehle() as $ko_c) { $ko_bs_vo_titel[$ko_c[1]] = $ko_c[0]; }
-$ko_bs_vo = function ($schl) use ($ko_bs_vo_titel) {
-    return isset($ko_bs_vo_titel[$schl]) ? $ko_bs_vo_titel[$schl] : '{' . $schl . '}';
-};
-/* Erst vsprintf auf den Sprachtext, dann maskieren: eingesetzte Titel kommen nie roh heraus. */
+$ko_bs_gw = function ($name) use ($ko_cfg) { return ko_vi_name($name, $ko_cfg); };
+$ko_bs_thema = array();
+foreach (ko_mqtt_befehl_zeilen($ko_cfg) as $ko_bz) { $ko_bs_thema[$ko_bz['schl']] = $ko_bz['thema']; }
+$ko_bs_vo = function ($schl) { return (string) ko_t('VOBEF.' . $schl); };
+/* Erst vsprintf auf den Sprachtext, dann maskieren: eingesetzte Namen kommen nie roh heraus. */
 $ko_bs_k = function ($schluessel, $argumente = array()) {
     $s = (string) ko_t('BAUSTEIN.' . $schluessel);
     return ko_e($argumente ? vsprintf($s, $argumente) : $s);
@@ -1644,28 +1780,28 @@ $ko_bs_k = function ($schluessel, $argumente = array()) {
 $ko_bs_m = '&mdash;';
 $ko_bs_ein = function ($nr) use ($ko_bs_k) { return $ko_bs_k('E_EIN', array($nr)); };
 $ko_bs_aus = function ($pin, $nr) use ($ko_bs_k) { return $ko_bs_k('E_AUSGANG', array($pin, $nr)); };
-/* Eingang aus der Vorlage "Kodi Zustand": Typ mit Vorlagentitel, Name aus dem XML. */
-$ko_bs_vi_z = function ($nr, $thema, $param) use ($ko_bs_k, $ko_bs_gw, $ko_bs_mono, $ko_vi_kopf, $ko_bs_m) {
-    return array($nr, $ko_bs_k('TYP_VI', array($ko_vi_kopf['Title'])), $ko_bs_mono($ko_bs_gw($thema)),
-                 $ko_bs_k($param), $ko_bs_m);
+/* Virtueller Eingang (Gateway-Name). */
+$ko_bs_vi_z = function ($nr, $thema, $param) use ($ko_bs_k, $ko_bs_gw, $ko_bs_mono, $ko_bs_m) {
+    return array($nr, $ko_bs_k('TYP_VI'), $ko_bs_mono($ko_bs_gw($thema)), $ko_bs_k($param), $ko_bs_m);
 };
-/* Befehl aus der Vorlage "Kodi steuern": Name = Titel, Parameter = Anzeigename [VOBEF]. */
-$ko_bs_vo_z = function ($nr, $schl, $verb) use ($ko_bs_k, $ko_bs_vo, $ko_bs_mono, $ko_vo_kopf) {
-    return array($nr, $ko_bs_k('TYP_VO', array($ko_vo_kopf['Title'])), $ko_bs_mono($ko_bs_vo($schl)),
-                 ko_e(ko_t('VOBEF.' . $schl)), $verb);
+/* Befehl am Ausgang "LoxBerry MQTT-Gateway": Name = Anzeigename [VOBEF], Parameter mit dem Thema. */
+$ko_bs_vo_z = function ($nr, $schl, $param, $verb) use ($ko_bs_k, $ko_bs_vo, $ko_bs_mono, $ko_bs_thema) {
+    return array($nr, $ko_bs_k('TYP_VO'), $ko_bs_mono($ko_bs_vo($schl)),
+                 $ko_bs_k($param, array(isset($ko_bs_thema[$schl]) ? $ko_bs_thema[$schl] : '?')), $verb);
 };
 /* Virtueller Texteingang: Name = Gateway-Name des Themas. */
-$ko_bs_tx_z = function ($nr, $thema, $param) use ($ko_bs_k, $ko_bs_tx, $ko_bs_mono, $ko_bs_m) {
-    return array($nr, $ko_bs_k('T_TEXTEIN'), $ko_bs_mono($ko_bs_tx($thema)), $ko_bs_k($param), $ko_bs_m);
+$ko_bs_tx_z = function ($nr, $thema, $param) use ($ko_bs_k, $ko_bs_gw, $ko_bs_mono, $ko_bs_m) {
+    return array($nr, $ko_bs_k('T_TEXTEIN'), $ko_bs_mono($ko_bs_gw($thema)), $ko_bs_k($param), $ko_bs_m);
 };
 /* Uebriger Baustein: Typ-Schluessel, Name <S>_NAME, Parameter <S>_PARAM. */
 $ko_bs_zl = function ($nr, $typ, $s, $param, $verb) use ($ko_bs_k, $ko_bs_m) {
     return array($nr, $ko_bs_k($typ), $ko_bs_k($s . '_NAME'), $param === '' ? $ko_bs_m : $ko_bs_k($param), $verb);
 };
+$ko_bs_ausgang = 'LoxBerry MQTT-Gateway';
 $ko_bs_seiten = array(
     array('kopf' => 'BL_ZUSTAND', 'seite' => 'Kodi-NG', 'bild' => 'einbindung_loxone.png', 'zeilen' => array(
         $ko_bs_vi_z(1, 'dienst', 'S1_01_PARAM'),
-        $ko_bs_vi_z(2, 'herzschlag', 'S1_02_PARAM'),
+        $ko_bs_vi_z(2, 'status/zaehler', 'S1_02_PARAM'),
         $ko_bs_vi_z(3, 'status/ok', 'S1_03_PARAM'),
         $ko_bs_zl(4, 'T_KONSTANTE', 'S1_04', 'S1_04_PARAM', $ko_bs_m),
         $ko_bs_zl(5, 'T_VALID', 'S1_05', 'S1_05_PARAM', 'V = #2, En = #4'),
@@ -1676,14 +1812,14 @@ $ko_bs_seiten = array(
         $ko_bs_zl(10, 'T_FORMEL', 'S1_10', 'S1_10_PARAM', 'I1 = #1, I2 = #8'),
         $ko_bs_zl(11, 'T_STATUS', 'S1_11', 'S1_11_PARAM', 'V1 = #10'),
         $ko_bs_zl(12, 'T_VTASTE', 'S1_12', 'S1_12_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(13, 'V_PLAYPAUSE', $ko_bs_ein(12)),
+        $ko_bs_vo_z(13, 'V_PLAYPAUSE', 'S1_13_PARAM', $ko_bs_ein(12)),
         $ko_bs_vi_z(14, 'autostart', 'S1_14_PARAM'),
-        $ko_bs_zl(15, 'T_STATUS', 'S1_15', 'S1_15_PARAM', 'V1 = #14, V2 = #2'),
+        $ko_bs_zl(15, 'T_STATUS', 'S1_15', 'S1_15_PARAM', 'V1 = #14, V2 = #8'),
         $ko_bs_zl(16, 'T_NICHT', 'S1_16', '', 'I = #1'),
         $ko_bs_zl(17, 'T_UND', 'S1_17', 'S1_17_PARAM', 'I1 = #16, I2 = #14'),
         $ko_bs_zl(18, 'T_EVZ', 'S1_18', 'S1_18_PARAM', $ko_bs_ein(17)),
         $ko_bs_zl(19, 'T_BENACHR', 'S1_19', 'S1_19_PARAM', $ko_bs_ein(18)),
-        $ko_bs_zl(20, 'T_STATUS', 'S1_20', 'S1_20_PARAM', 'V1 = #2, V2 = #3'),
+        $ko_bs_zl(20, 'T_STATUS', 'S1_20', 'S1_20_PARAM', 'V1 = #2, V2 = #3, V3 = ' . $ko_bs_aus('error', 5)),
         $ko_bs_vi_z(21, 'erreichbar', 'S1_21_PARAM'),
         $ko_bs_zl(22, 'T_VSCHALTER', 'S1_22', 'S1_22_PARAM', $ko_bs_m),
         $ko_bs_zl(23, 'T_NICHT', 'S1_23', '', 'I = #21'),
@@ -1696,14 +1832,16 @@ $ko_bs_seiten = array(
         'schritte' => array(
             array('S1_SCHRITT1', array()),
             array('S1_SCHRITT2', array(ko_t('EINST.L_SENDER'), ko_t('ADDON.K_SETZEN'), ko_t('ADDON.L_ANHALTEN'))),
-            array('S1_SCHRITT3', array(ko_t('REITER.EINSTELLUNGEN'), ko_t('EINST.L_RPC'), $ko_bs_gw('erreichbar'))),
-            array('S1_SCHRITT4', array(ko_t('LOX.K_VORLAGE'), ko_t('LOX.K_VORLAGE_VO'))),
-            array('S1_SCHRITT5', array($ko_vi_datei, $ko_vo_datei)),
-            array('S1_SCHRITT6', array($ko_vi_kopf['Title'], $ko_bs_gw('dienst'), $ko_bs_gw('herzschlag'), $ko_bs_gw('status/ok'), $ko_bs_gw('autostart'), $ko_bs_gw('erreichbar'), $ko_vo_kopf['Title'], $ko_bs_vo('V_PLAYPAUSE'))),
+            array('S1_SCHRITT3', array(ko_t('BEFEHL.L_EIN'), ko_t('BEFEHL.L_STEUERN'))),
+            array('S1_SCHRITT4', array(ko_t('REITER.EINSTELLUNGEN'), ko_t('EINST.L_RPC'), $ko_bs_gw('erreichbar'))),
+            array('S1_SCHRITT5', array()),
+            array('S1_SCHRITT6', array($ko_bs_gw('dienst'), $ko_bs_gw('status/zaehler'), $ko_bs_gw('status/ok'), $ko_bs_gw('autostart'), $ko_bs_gw('erreichbar'))),
+            array('S1_SCHRITT6B', array($ko_bs_ausgang, '/dev/udp/' . ko_udp_wirt() . '/' . ($ko_port ? (int) $ko_port : 11884), ko_t('LOX.K_VORLAGE_MQTT'))),
+            array('S1_SCHRITT6C', array($ko_bs_ausgang, $ko_bs_vo('V_PLAYPAUSE'))),
             array('S1_SCHRITT7', array()),
             array('S1_SCHRITT8', array()),
             array('S1_SCHRITT9', array(ko_t('BAUSTEIN.SP_EINGAENGE'))),
-            array('S1_SCHRITT10', array($ko_bs_gw('herzschlag'))),
+            array('S1_SCHRITT10', array($ko_bs_gw('status/zaehler'))),
             array('S1_SCHRITT11', array()),
         ),
         'hinweise' => array(
@@ -1711,75 +1849,76 @@ $ko_bs_seiten = array(
             array('S1_H2', array()),
             array('S1_H3', array(ko_t('TEST.K_START'), ko_t('REITER.EINSTELLUNGEN'))),
             array('S1_H4', array($ko_bs_gw('erreichbar'))),
+            array('S1_H5', array(ko_praefix($ko_cfg) . '/befehl/#')),
         )),
     array('kopf' => 'BL_FERN', 'seite' => 'Kodi-NG Fernbedienung', 'bild' => 'einbindung_loxone_fernbedienung.png', 'zeilen' => array(
         $ko_bs_zl(1, 'T_VTASTE', 'S2_01', 'S2_01_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(2, 'V_UP', $ko_bs_ein(1)),
+        $ko_bs_vo_z(2, 'V_UP', 'S2_02_PARAM', $ko_bs_ein(1)),
         $ko_bs_zl(3, 'T_VTASTE', 'S2_03', 'S2_03_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(4, 'V_DOWN', $ko_bs_ein(3)),
+        $ko_bs_vo_z(4, 'V_DOWN', 'S2_VO_PARAM', $ko_bs_ein(3)),
         $ko_bs_zl(5, 'T_VTASTE', 'S2_05', 'S2_05_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(6, 'V_LEFT', $ko_bs_ein(5)),
+        $ko_bs_vo_z(6, 'V_LEFT', 'S2_VO_PARAM', $ko_bs_ein(5)),
         $ko_bs_zl(7, 'T_VTASTE', 'S2_07', 'S2_07_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(8, 'V_RIGHT', $ko_bs_ein(7)),
+        $ko_bs_vo_z(8, 'V_RIGHT', 'S2_VO_PARAM', $ko_bs_ein(7)),
         $ko_bs_zl(9, 'T_VTASTE', 'S2_09', 'S2_09_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(10, 'V_SELECT', $ko_bs_ein(9)),
+        $ko_bs_vo_z(10, 'V_SELECT', 'S2_VO_PARAM', $ko_bs_ein(9)),
         $ko_bs_zl(11, 'T_VTASTE', 'S2_11', 'S2_11_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(12, 'V_BACK', $ko_bs_ein(11)),
+        $ko_bs_vo_z(12, 'V_BACK', 'S2_VO_PARAM', $ko_bs_ein(11)),
         $ko_bs_zl(13, 'T_VTASTE', 'S2_13', 'S2_13_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(14, 'V_HOME', $ko_bs_ein(13)),
+        $ko_bs_vo_z(14, 'V_HOME', 'S2_VO_PARAM', $ko_bs_ein(13)),
         $ko_bs_zl(15, 'T_VTASTE', 'S2_15', 'S2_15_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(16, 'V_CONTEXT', $ko_bs_ein(15)),
+        $ko_bs_vo_z(16, 'V_CONTEXT', 'S2_VO_PARAM', $ko_bs_ein(15)),
         $ko_bs_zl(17, 'T_VTASTE', 'S2_17', 'S2_17_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(18, 'V_INFO', $ko_bs_ein(17)),
+        $ko_bs_vo_z(18, 'V_INFO', 'S2_VO_PARAM', $ko_bs_ein(17)),
         $ko_bs_zl(19, 'T_VTASTE', 'S2_19', 'S2_19_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(20, 'V_OSD', $ko_bs_ein(19)),
+        $ko_bs_vo_z(20, 'V_OSD', 'S2_VO_PARAM', $ko_bs_ein(19)),
         $ko_bs_zl(21, 'T_VTASTE', 'S2_21', 'S2_21_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(22, 'V_PAGEUP', $ko_bs_ein(21)),
+        $ko_bs_vo_z(22, 'V_PAGEUP', 'S2_VO_PARAM', $ko_bs_ein(21)),
         $ko_bs_zl(23, 'T_VTASTE', 'S2_23', 'S2_23_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(24, 'V_PAGEDOWN', $ko_bs_ein(23)),
+        $ko_bs_vo_z(24, 'V_PAGEDOWN', 'S2_VO_PARAM', $ko_bs_ein(23)),
         ),
         'schritte' => array(
             array('S2_SCHRITT1', array()),
-            array('S2_SCHRITT2', array($ko_vo_kopf['Title'], implode(', ', array_map($ko_bs_vo, array('V_UP', 'V_DOWN', 'V_LEFT', 'V_RIGHT', 'V_SELECT', 'V_BACK', 'V_HOME', 'V_CONTEXT', 'V_INFO', 'V_OSD', 'V_PAGEUP', 'V_PAGEDOWN'))))),
+            array('S2_SCHRITT2', array(implode(', ', array_map($ko_bs_vo, array('V_UP', 'V_DOWN', 'V_LEFT', 'V_RIGHT', 'V_SELECT', 'V_BACK', 'V_HOME', 'V_CONTEXT', 'V_INFO', 'V_OSD', 'V_PAGEUP', 'V_PAGEDOWN'))), $ko_bs_ausgang)),
             array('S2_SCHRITT3', array()),
             array('S2_SCHRITT4', array()),
         ),
         'hinweise' => array(
             array('S2_H1', array()),
-            array('S2_H2', array($ko_vo_kopf['Title'])),
+            array('S2_H2', array(ko_praefix($ko_cfg) . '/befehl/#')),
         )),
     array('kopf' => 'BL_WIEDERGABE', 'seite' => 'Kodi-NG Wiedergabe', 'bild' => 'einbindung_loxone_wiedergabe.png', 'zeilen' => array(
         $ko_bs_zl(1, 'T_VTASTE', 'S3_01', 'S3_01_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(2, 'V_PLAY', $ko_bs_ein(1)),
+        $ko_bs_vo_z(2, 'V_PLAY', 'S3_02_PARAM', $ko_bs_ein(1)),
         $ko_bs_zl(3, 'T_VTASTE', 'S3_03', 'S3_03_PARAM', $ko_bs_m),
         $ko_bs_zl(4, 'T_VTASTE', 'S3_04', 'S3_04_PARAM', $ko_bs_m),
         $ko_bs_zl(5, 'T_ODER', 'S3_05', 'S3_05_PARAM', 'I1 = #3, I2 = #4'),
-        $ko_bs_vo_z(6, 'V_PAUSE', $ko_bs_ein(5)),
+        $ko_bs_vo_z(6, 'V_PAUSE', 'S3_06_PARAM', $ko_bs_ein(5)),
         $ko_bs_zl(7, 'T_VTASTE', 'S3_07', 'S3_07_PARAM', $ko_bs_m),
         $ko_bs_zl(8, 'T_VSCHALTER', 'S3_08', 'S3_08_PARAM', $ko_bs_m),
         $ko_bs_zl(9, 'T_FLANKE', 'S3_09', 'S3_09_PARAM', $ko_bs_ein(8)),
         $ko_bs_zl(10, 'T_ODER', 'S3_10', 'S3_10_PARAM', 'I1 = #7, I2 = ' . $ko_bs_aus('On', 9)),
-        $ko_bs_vo_z(11, 'V_STOP', $ko_bs_ein(10)),
+        $ko_bs_vo_z(11, 'V_STOP', 'S3_VO_PARAM', $ko_bs_ein(10)),
         $ko_bs_zl(12, 'T_VTASTE', 'S3_12', 'S3_12_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(13, 'V_NEXT', $ko_bs_ein(12)),
+        $ko_bs_vo_z(13, 'V_NEXT', 'S3_VO_PARAM', $ko_bs_ein(12)),
         $ko_bs_zl(14, 'T_VTASTE', 'S3_14', 'S3_14_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(15, 'V_PREV', $ko_bs_ein(14)),
+        $ko_bs_vo_z(15, 'V_PREV', 'S3_VO_PARAM', $ko_bs_ein(14)),
         $ko_bs_zl(16, 'T_VTASTE', 'S3_16', 'S3_16_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(17, 'V_SEEK_VOR', $ko_bs_ein(16)),
+        $ko_bs_vo_z(17, 'V_SEEK_VOR', 'S3_VO_JEDER_PARAM', $ko_bs_ein(16)),
         $ko_bs_zl(18, 'T_VTASTE', 'S3_18', 'S3_18_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(19, 'V_SEEK_ZUR', $ko_bs_ein(18)),
+        $ko_bs_vo_z(19, 'V_SEEK_ZUR', 'S3_VO_JEDER_PARAM', $ko_bs_ein(18)),
         $ko_bs_zl(20, 'T_VTASTE', 'S3_20', 'S3_20_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(21, 'V_VOL_AUF', $ko_bs_ein(20)),
+        $ko_bs_vo_z(21, 'V_VOL_AUF', 'S3_VO_JEDER_PARAM', $ko_bs_ein(20)),
         $ko_bs_zl(22, 'T_VTASTE', 'S3_22', 'S3_22_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(23, 'V_VOL_AB', $ko_bs_ein(22)),
+        $ko_bs_vo_z(23, 'V_VOL_AB', 'S3_VO_JEDER_PARAM', $ko_bs_ein(22)),
         $ko_bs_zl(24, 'T_VTASTE', 'S3_24', 'S3_24_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(25, 'V_MUTE_UM', $ko_bs_ein(24)),
+        $ko_bs_vo_z(25, 'V_MUTE_UM', 'S3_VO_PARAM', $ko_bs_ein(24)),
         $ko_bs_zl(26, 'T_VTASTE', 'S3_26', 'S3_26_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(27, 'V_MUTE_AN', $ko_bs_ein(26)),
+        $ko_bs_vo_z(27, 'V_MUTE_AN', 'S3_VO_PARAM', $ko_bs_ein(26)),
         $ko_bs_zl(28, 'T_VTASTE', 'S3_28', 'S3_28_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(29, 'V_MUTE_AUS', $ko_bs_ein(28)),
+        $ko_bs_vo_z(29, 'V_MUTE_AUS', 'S3_VO_PARAM', $ko_bs_ein(28)),
         $ko_bs_zl(30, 'T_VTASTE', 'S3_30', 'S3_30_PARAM', $ko_bs_m),
-        $ko_bs_vo_z(31, 'V_QUIT', $ko_bs_ein(30)),
+        $ko_bs_vo_z(31, 'V_QUIT', 'S3_31_PARAM', $ko_bs_ein(30)),
         $ko_bs_tx_z(32, 'event', 'S3_32_PARAM'),
         $ko_bs_tx_z(33, 'movie_title', 'S3_33_PARAM'),
         $ko_bs_tx_z(34, 'episode_title', 'S3_34_PARAM'),
@@ -1790,10 +1929,10 @@ $ko_bs_seiten = array(
         ),
         'schritte' => array(
             array('S3_SCHRITT1', array()),
-            array('S3_SCHRITT2', array($ko_vo_kopf['Title'], $ko_bs_vo('V_PLAYPAUSE'))),
+            array('S3_SCHRITT2', array($ko_bs_ausgang, $ko_bs_vo('V_PLAYPAUSE'))),
             array('S3_SCHRITT3', array()),
             array('S3_SCHRITT4', array()),
-            array('S3_SCHRITT5', array(implode(', ', array_map($ko_bs_tx, array('event', 'movie_title', 'episode_title', 'music_title', 'screensaver'))), $ko_cfg['mqtt_topic'])),
+            array('S3_SCHRITT5', array(implode(', ', array_map($ko_bs_gw, array('event', 'movie_title', 'episode_title', 'music_title', 'screensaver'))), ko_praefix($ko_cfg))),
             array('S3_SCHRITT6', array()),
             array('S3_SCHRITT7', array(ko_t('BAUSTEIN.SP_EINGAENGE'))),
             array('S3_SCHRITT8', array()),
@@ -1801,13 +1940,13 @@ $ko_bs_seiten = array(
         'hinweise' => array(
             array('S3_H1', array()),
             array('S3_H2', array()),
-            array('S3_H3', array(ko_t('REITER.EINSTELLUNGEN'))),
+            array('S3_H3', array(ko_t('REITER.EINSTELLUNGEN'), ko_t('BEFEHL.L_STEUERN'))),
             array('S3_H4', array()),
             array('S3_H5', array(ko_t('ADDON.K_SETZEN'))),
         )),
 );
 ?>
-<div class="sm-hilfe"><?= sprintf($ko_bs_t('VORTEXT'), '<i>' . ko_e($ko_vi_kopf['Title']) . '</i>', '<i>' . ko_e($ko_vo_kopf['Title']) . '</i>') ?></div>
+<div class="sm-hilfe"><?= sprintf($ko_bs_t('VORTEXT'), '<i>' . ko_e($ko_bs_ausgang) . '</i>') ?></div>
 <?php foreach ($ko_bs_seiten as $ko_bs_s) { ?>
 <h4 class="sm-h4"><?= ko_e(ko_t('LOX.' . $ko_bs_s['kopf'])) ?></h4>
 <div class="sm-hinweis"><b><?= $ko_bs_k('SCHRITTE_TITEL') ?></b>
@@ -1838,24 +1977,11 @@ $ko_bs_seiten = array(
 </figure>
 <div class="sm-hilfe"><?= ko_t('LOX.MUSTERPROJEKT') ?></div>
 <?php } ?>
-<?php /* 1.2.18 (Hausherr 10.10.2026): alle Befehle der Vorlage "Kodi steuern" - Zeilen nur aus
-       * ko_vo_befehle(), in deren Reihenfolge; Titel und Anzeigename, der JSON-Befehl nicht.
-       * 1.2.19: bleibt unter den drei Listen. */ ?>
-<div class="sm-step"><?= ko_e(sprintf($ko_bs_t('BEF_TITEL'), $ko_vo_kopf['Title'])) ?></div>
-<div class="sm-breit">
-<table class="sm-tbl">
-<tr><th><?= ko_e($ko_bs_t('BEF_SP_BEFEHL')) ?></th><th><?= ko_e($ko_bs_t('BEF_SP_BEDEUTUNG')) ?></th></tr>
-<?php foreach (ko_vo_befehle() as $ko_c) { ?>
-<tr><td class="sm-mono"><?= ko_e($ko_c[0]) ?></td><td><?= ko_e(ko_t('VOBEF.' . $ko_c[1])) ?></td></tr>
-<?php } ?>
-</table>
-</div>
-<div class="sm-hilfe"><?= ko_e($ko_bs_t('BEF_UNTERSCHRIFT')) ?> <?= ko_e($ko_bs_t('BEF_TASTER')) ?></div>
 
 <h3><?= ko_e(ko_t('LOX.S7')) ?></h3>
 <div class="sm-step"><?= sprintf(ko_t('LOX.S7_TEXT'),
     '<span class="sm-mono">' . ko_e($ko_cfg['mqtt_topic']) . '/#</span>',
-    $ko_vn('herzschlag')) ?></div>
+    $ko_vn('status/zaehler')) ?></div>
 
 </div>
 
@@ -1977,6 +2103,9 @@ if ($ko_zeilen) {
 		if (history.replaceState) { history.replaceState(null, '', 'index.php?form=' + id.replace('tab-', '')); }
 	}
 	reiter.forEach(function (r) {
+		// K15/K17 (1.2.22, Bauart Matter2Lox 0.9.42): Test und MQTT rendern ihre Pruefzeilen bzw. die
+		// Addon-Tabelle nur, wenn sie serverseitig offen sind - dort folgt der Browser dem href.
+		if (r.dataset.ziel === 'tab-test' || r.dataset.ziel === 'tab-mqtt') { return; }
 		// Ohne JavaScript folgt der Browser dem href, und der Server liefert
 		// den richtigen Reiter. Mit JavaScript geht es schneller ohne
 		// Neuladen - deshalb hier den Verweis abfangen.

@@ -22,6 +22,15 @@
 # Zuweisungen und nicht hier im Kommentar, sonst stuende danach in dieser
 # Datei ein fest verdrahteter Systempfad.
 
+# WAECHTER DER BEFEHLSBRUECKE (seit 1.2.22, Entwurf Gruppe 10, 3.5) - als ERSTE Anweisung, vor dem Ausstieg ohne
+# kodi.json und vor dem Senderschalter: sonst startete die Bruecke nie, solange der Statussender aus ist. Er
+# startet sie nach Boot und Update spaetestens nach einer Minute, wenn "Befehle ueber MQTT annehmen" gesetzt ist,
+# und haelt sie sonst an (befehlsbruecke.php --waechter: misst zustand.json, nie waehrend einer Aktualisierung,
+# hoechstens alle 600 s ein Neustart). Kein Start in den Hakenskripten. Ausgabe nach /dev/null: die Bruecke
+# protokolliert selbst. Bauart Matter2Lox 0.9.44.
+BBSH="REPLACELBPBINDIR/befehlsbruecke.sh"
+[ -f "$BBSH" ] && /bin/bash "$BBSH" waechter >/dev/null 2>&1
+
 SKRIPT="REPLACELBPBINDIR/kodi_ng_status.php"
 CFG="REPLACELBPCONFIGDIR/kodi.json"
 ABO="REPLACELBPCONFIGDIR/mqtt_subscriptions.cfg"
@@ -52,6 +61,12 @@ fi
 # dafuer schreibt das Plugin die Datei ohnehin nicht.
 if grep -q '"sender_ein"[[:space:]]*:[[:space:]]*"0"' "$CFG"; then
     PRAEFIX=$(sed -n 's#.*"mqtt_topic"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._/-]*\)".*#\1#p' "$CFG" | head -n 1)
+    # K11 (1.2.22): steht "mqtt_topic" in der Datei, aber nicht in der Positivliste, schreibt das Plugin die
+    # Abodatei ohnehin nicht (ko_abodatei_nachfuehren) - es gibt nichts nachzufuehren. Bis 1.2.21 lief dann
+    # jede Minute ein PHP-Prozess an, sobald die Abodatei ein anderes Praefix trug (Probe k11.sh).
+    if [ -z "$PRAEFIX" ] && grep -q '"mqtt_topic"' "$CFG"; then
+        exit 0
+    fi
     [ -n "$PRAEFIX" ] || PRAEFIX=kodi
     if [ -f "$ABO" ] && [ "$(cat "$ABO" 2>/dev/null)" = "$PRAEFIX/#" ]; then
         exit 0

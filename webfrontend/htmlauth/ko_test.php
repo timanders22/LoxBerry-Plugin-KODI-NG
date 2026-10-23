@@ -266,7 +266,8 @@ function ko_vorlagenprobe()
     $vorher = libxml_use_internal_errors(true);
     $fehler = array();
     $anzahl = 0;
-    foreach (array(ko_vorlage(), ko_vorlage_vo('pruefstand')) as $v) {
+    // 1.2.22: die Vorlage MQTT-Befehle statt der entfallenen Eingangsvorlage (Entscheidung 1).
+    foreach (array(ko_vorlage_mqtt_out('pruefstand'), ko_vorlage_vo('pruefstand')) as $v) {
         $anzahl++;
         libxml_clear_errors();
         $x = simplexml_load_string($v[1]);
@@ -703,6 +704,39 @@ function ko_pruefungen(array $reiter, $indexdatei)
         }
     }
 
+    /* --- Gruppe 10 (1.2.22): Befehle ueber MQTT, Lebenszeichen status/zaehler, Namenstabelle, Kodis
+     *     Fernsteuerung aus dem Heimnetz, Fassung des mitgelieferten Addons. Alle lesen nur; "Erreicht die
+     *     Bruecke Kodi?" fragt Kodi (JSONRPC.Ping, 3 s) und ist 300 s zwischengespeichert. */
+    list($s, $t) = ko_pruef_bruecke($cfg);
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_BRUECKE'), $t);
+    list($s, $t) = ko_pruef_bruecke_einrichtung($cfg);
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_BRUECKE_EINRICHTUNG'), $t);
+    list($s, $t) = ko_pruef_befehlstabellen();
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_BEFTAB'), $t);
+    list($s, $t) = ko_pruef_bruecke_kodi($cfg, function () {
+        list($r) = ko_zwischenspeicher('bruecke_kodi', 300, function () { return ko_rpc('JSONRPC.Ping', null, 3); });
+        return is_array($r) ? $r : array(false, '?');
+    });
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_BRUECKE_KODI'), $t);
+    if ((string) $cfg['sender_ein'] !== '1') {
+        $z[] = ko_pruefzeile(-1, ko_t('TEST.F_ZAEHLER'), ko_t('TEST.A_ZAEHLER_AUS'));
+    } else {
+        $ko_lz = isset($zu['lebenszeichen_ts']) ? time() - (int) $zu['lebenszeichen_ts'] : -1;
+        $ko_hz = isset($zu['herzschlag']) ? (int) $zu['herzschlag'] : 0;
+        $z[] = ($ko_lz >= 0 && $ko_lz <= 150)
+            ? ko_pruefzeile(1, ko_t('TEST.F_ZAEHLER'), sprintf(ko_t('TEST.A_ZAEHLER_OK'), $ko_hz % 1000, $ko_lz,
+                '<span class="sm-mono">' . ko_e(ko_praefix($cfg) . '/status/zaehler') . '</span>'))
+            : ko_pruefzeile(0, ko_t('TEST.F_ZAEHLER'), sprintf(ko_t('TEST.A_ZAEHLER_ALT'),
+                $ko_lz >= 0 ? sprintf(ko_t('TEST.VOR_S'), $ko_lz) : ko_t('TEST.NOCH_NIE')));
+    }
+    list($s, $t) = ko_pruef_namen();
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_NAMEN'), $t);
+    list($s, $t) = ko_pruef_fernsteuerung($cfg, $adv);
+    $z[] = ko_pruefzeile($s, ko_t('TEST.F_NETZ'), $t);
+    $ko_af = ko_addon_fassung(ko_addon_quelle());
+    $z[] = ko_pruefzeile($ko_af !== '' ? 1 : -1, ko_t('TEST.F_ADDONFASSUNG'),
+        $ko_af !== '' ? sprintf(ko_t('TEST.A_ADDONFASSUNG'), ko_e($ko_af)) : ko_t('TEST.A_ADDONFASSUNG_UNKLAR'));
+
     /* --- Die Proben ueber die eigenen Dateien. */
     list($s, $t) = ko_themenprobe($p['bin'] . '/kodi_ng_status.php', ko_addon_quelle());
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_THEMEN'), $t);
@@ -834,7 +868,8 @@ function ko_test_aktion($was)
             if ($php === '') {
                 return array(ko_t('TEST.K_TROCKEN'), ko_e(ko_t('TEST.A_KEIN_PHP')));
             }
-            $r = (string) @shell_exec(escapeshellcmd($php) . ' ' . escapeshellarg($skript)
+            // K19 (1.2.22): aeussere Frist wie uninstall (timeout 60).
+            $r = (string) @shell_exec('timeout 60 ' . escapeshellcmd($php) . ' ' . escapeshellarg($skript)
                 . ' --jetzt --trocken 2>&1');
             return array(ko_t('TEST.K_TROCKEN'),
                 ko_e($r !== '' ? $r : ko_t('TEST.A_KEINE_AUSGABE')));
@@ -856,8 +891,10 @@ function ko_test_aktion($was)
             if ($php === '') {
                 return array(ko_t('TEST.K_SENDERJETZT'), ko_e(ko_t('TEST.A_KEIN_PHP')));
             }
-            $r = (string) @shell_exec(escapeshellcmd($php) . ' ' . escapeshellarg($skript)
+            // K19 (1.2.22): aeussere Frist wie uninstall (timeout 60); RC=124 heisst: abgebrochen.
+            $r = (string) @shell_exec('timeout 60 ' . escapeshellcmd($php) . ' ' . escapeshellarg($skript)
                 . ' --jetzt 2>&1; echo "RC=$?"');
+            if (preg_match('/RC=124\s*$/', $r)) { $r .= ko_t('TEST.A_ZEITGRENZE') . "\n"; }
             /* Der RUECKGABEWERT wird mitgemessen, nicht nur der Text. Das
              * Skript schweigt im Erfolgsfall - wer nur den Text auswertet,
              * sieht ein gelungenes und ein stumm gescheitertes Ergebnis

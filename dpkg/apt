@@ -24,4 +24,8 @@
 # stream_socket_client(), und das gehoert zum PHP-Kern. Das Paket wird also
 # nicht gebraucht - und ein Plugin, das eine Erweiterung nachinstalliert, die
 # es gar nicht benutzt, waere nur eine weitere Wette.
+#
+# mosquitto-clients (seit 1.2.22): gebraucht von der Befehlsbruecke (bin/befehlsbruecke.php) - sie abonniert
+# <praefix>/befehl/# mit mosquitto_sub und quittiert mit mosquitto_pub.
 kodi
+mosquitto-clients

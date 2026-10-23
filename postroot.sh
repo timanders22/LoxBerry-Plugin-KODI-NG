@@ -248,7 +248,9 @@ if [ "$KO_CFGOK" = "1" ]; then
             echo "<INFO> Setting GPU memory to 192MB in $CONFIGTXT"
             KO_TMPCFG="${CONFIGTXT}.kodiplugin.tmp"
             rm -f "$KO_TMPCFG"
-            if awk -v s="gpu_mem=192" '/^gpu_mem=/{$0=s;f=1} {print} END{if(!f){print "[all]"; print s}}' "$CONFIGTXT" > "$KO_TMPCFG" \
+            # K4b (1.2.22): nur Zeilen ausserhalb eines Modellabschnitts oder unter [all] ersetzen; bis 1.2.21
+            # traf das Muster auch gpu_mem unter [pi3]/[pi0], und auf einem Pi 0-2 blieb gpu_mem dann ungesetzt.
+            if awk -v s="gpu_mem=192" '/^\[/{sec=$0} /^gpu_mem=/ && (sec=="" || sec=="[all]"){$0=s;f=1} {print} END{if(!f){print "[all]"; print s}}' "$CONFIGTXT" > "$KO_TMPCFG" \
                && [ -s "$KO_TMPCFG" ]; then
                 if cmp -s "$KO_TMPCFG" "$CONFIGTXT"; then
                     rm -f "$KO_TMPCFG"
@@ -298,7 +300,9 @@ mkdir -p /home/kodi/.kodi/userdata
 #      Sicherung, die nichts enthaelt als das, was das Plugin selbst
 #      mitbringt - und die dann nach 1. fuer immer stehen bliebe.
 #
-# <esallinterfaces> BLEIBT. Gemessen am 17.09.2026 im Quelltext von Kodi 21
+# <esallinterfaces> BLEIBT - ab Werk. Seit 1.2.22 laesst es sich mit dem Haken
+# "Kodis Fernsteuerung aus dem Heimnetz zulassen" (Reiter Einbindung) abschalten;
+# unten haelt dieses Skript den Wert aus kodi.json. Gemessen am 17.09.2026 im Quelltext von Kodi 21
 # (xbmc/network/NetworkServices.cpp, StartJSONRPCServer; TCPServer.cpp): der
 # JSON-RPC-Server auf TCP 9090 lauscht nur mit dieser Einstellung auch fuer
 # ANDERE Rechner, sonst nur auf 127.0.0.1. Die Steuerbefehle aus Loxone gehen
@@ -377,6 +381,38 @@ else
         else
             echo "<FAIL> advancedsettings.xml liess sich nicht nach /home/kodi/.kodi/userdata kopieren."
             KO_FEHLER=1
+        fi
+        # "KODIS FERNSTEUERUNG AUS DEM HEIMNETZ ZULASSEN" UEBERLEBT DAS EINSPIELEN (seit 1.2.22, Entwurf
+        # Gruppe 10, 3.6, E4). Die mitgelieferte Datei traegt esallinterfaces=true; hat der Anwender den Haken
+        # ausgeschaltet ("fernsteuerung_netz_ein": "0" in kodi.json - dieses Skript laeuft NACH postupgrade.sh,
+        # die Konfiguration ist also zurueckgestellt), wird genau dieses eine Element wieder auf false gestellt:
+        # Zwischendatei im selben Verzeichnis, Rechte, sync, umbenennen. Ohne kodi.json gilt die Vorgabe (an).
+        KO_CFGJ=""
+        case "$3" in
+            ''|.|..|*/*|*..*) ;;
+            *) if [ -f "$5/config/system/general.json" ]; then KO_CFGJ="$5/config/plugins/$3/kodi.json"; fi ;;
+        esac
+        if [ -n "$KO_CFGJ" ] && [ -f "$KO_CFGJ" ] \
+           && grep -q '"fernsteuerung_netz_ein"[[:space:]]*:[[:space:]]*"0"' "$KO_CFGJ" \
+           && cmp -s "$KO_ADV" "$ADVUSER"; then
+            KO_ADVTMP="$ADVUSER.kodiplugin.tmp"
+            rm -f "$KO_ADVTMP"
+            if sed 's#<esallinterfaces>true</esallinterfaces>#<esallinterfaces>false</esallinterfaces>#' "$ADVUSER" > "$KO_ADVTMP" \
+               && grep -q '<esallinterfaces>false</esallinterfaces>' "$KO_ADVTMP"; then
+                chmod --reference="$ADVUSER" "$KO_ADVTMP" 2>/dev/null
+                sync "$KO_ADVTMP" 2>/dev/null || sync
+                if mv -f "$KO_ADVTMP" "$ADVUSER"; then
+                    echo "<OK> Kodis Fernsteuerung aus dem Heimnetz bleibt aus (Haken im Plugin): esallinterfaces=false."
+                else
+                    rm -f "$KO_ADVTMP"
+                    echo "<FAIL> esallinterfaces liess sich nicht auf false stellen - Kodis Fernsteuerung ist fuer das"
+                    echo "<FAIL> Heimnetz OFFEN, obwohl der Haken im Plugin aus ist. Im Plugin erneut speichern."
+                    KO_FEHLER=1
+                fi
+            else
+                rm -f "$KO_ADVTMP"
+                echo "<WARNING> esallinterfaces liess sich in der Zwischendatei nicht auf false stellen; die Datei bleibt."
+            fi
         fi
     fi
 fi

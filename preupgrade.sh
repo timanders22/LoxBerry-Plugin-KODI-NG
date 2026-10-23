@@ -70,6 +70,14 @@ fi
 # Umbenennung auf kodi_ng. Griff er, sicherte bzw. suchte dieses
 # Skript in einem Verzeichnis, das es nicht mehr gibt.
 PDIR="${ARGV3:-kodi_ng}"
+# K5 (1.2.22, Hausform Matter2Lox 0.9.44): der Ordnername kommt vom Installer aus der eigenen plugin.cfg;
+# trotzdem kein Pfadtrenner, kein ".." und nicht "." oder ".." selbst - alle rm -rf haengen ihn an.
+# Rueckgabe 2 bricht VOR purge_installation ab; die bisherige Fassung bleibt stehen.
+case "$PDIR" in
+    ''|.|..|*/*|*..*)
+        echo "<FAIL> Unzulaessiger Ordnername '$PDIR' - das Update wird abgebrochen, die bisherige Fassung bleibt."
+        exit 2 ;;
+esac
 
 # DIE UPGRADE-MARKE (Entscheidung 1 des Hausherrn, 29.09.2026; Befund I1).
 #
@@ -78,7 +86,8 @@ PDIR="${ARGV3:-kodi_ng}"
 # Zurueckspielen liegen; ohne Marke legt postinstall.sh sie als <name>.alt
 # beiseite (Neuinstallation). Entschieden wird allein am Vorhandensein, nicht
 # am Alter. Sie liegt NEBEN dem Datenordner - purge_installation loescht den
-# Ordner selbst -, und postinstall.sh entfernt sie ueber einen trap.
+# Ordner selbst -, und postupgrade.sh entfernt sie erst nach dem geprueften
+# Zurueckstellen (seit 1.2.22, K1; bis 1.2.21 postinstall.sh ueber einen trap).
 #
 # Liegt sie schon, BEVOR dieses Skript sie anlegt, hat ein frueherer Versuch
 # dieses Updates nach preupgrade.sh abgebrochen - das braucht der Zweig
@@ -98,6 +107,15 @@ else
     echo "<FAIL> und legte die Einstellungen beiseite. Die Aktualisierung wird"
     echo "<FAIL> abgebrochen; die bisherige Fassung bleibt unveraendert installiert."
     exit 2
+fi
+
+# Gruppe 10 (1.2.22, Entwurf 3.5): die Befehlsbruecke anhalten (stop beendet Dienst UND mosquitto_sub). Beim
+# Umstieg von 1.2.21 oder frueher gibt es sie noch nicht - dann nichts. Die Marke von eben haelt den Waechter in
+# cron.01min bis zum Ende von postupgrade.sh ab (befehlsbruecke.sh start prueft dieselbe Marke; K1).
+BBSH="$BASE/bin/plugins/$PDIR/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    KO_BB=$(timeout 40 bash "$BBSH" stop 2>&1)
+    echo "<INFO> Befehlsbruecke: ${KO_BB:-keine Antwort}"
 fi
 
 # Geschweifte Klammern statt Rueckstrich.
@@ -155,8 +173,12 @@ chmod 0700 "$NEU" 2>/dev/null
 # Existenz PRUEFEN, bevor kopiert wird: ohne diese Bedingung meldete cp
 # "No such file or directory" ins Installationsprotokoll, sobald es noch
 # gar keine Konfiguration gab.
-if [ -d "$BASE/config/plugins/$PDIR" ] \
-   && [ -n "$(ls -A "$BASE/config/plugins/$PDIR" 2>/dev/null)" ]; then
+#
+# K2 (1.2.22): "Konfiguration vorhanden" heisst kodi.json mit Inhalt - nicht "Ordner nicht leer". Seit 1.2.13
+# legt der Installer beim Kopieren config/mqtt_subscriptions.cfg in den Ordner; nach einem Abbruch im langen
+# apt-Fenster lag NUR sie dort, und der zweite Anlauf ersetzte die richtige Sicherung durch eine ohne kodi.json
+# (Pruefbericht Fall C).
+if [ -s "$BASE/config/plugins/$PDIR/kodi.json" ]; then
     # Das Ergebnis PRUEFEN: meldete dieses Skript "gesichert", ohne dass
     # etwas gesichert war, loeschte der Installer danach die einzige Kopie.
     # Rueckgabewert 2 bricht die Aktualisierung vor dem Loeschen ab
@@ -206,9 +228,13 @@ else
     # Vorgang (bis 1.2.11 wurde sie dann beim naechsten Update eingespielt,
     # gemessen mit einem Stand von Monaten) und wird weggeraeumt.
     rm -rf "$NEU" 2>/dev/null
-    echo "<INFO> Unter $BASE/config/plugins/$PDIR liegt keine Konfiguration - es gibt nichts zu sichern."
+    echo "<INFO> Unter $BASE/config/plugins/$PDIR liegt keine kodi.json - es gibt nichts zu sichern."
     if [ -e "$SICHER" ] || [ -L "$SICHER" ]; then
-        if [ "$KO_MARKE_VORHER" = "1" ]; then
+        # K2 (1.2.22): eine Sicherung MIT kodi.json bei fehlender kodi.json entsteht nur durch einen
+        # abgebrochenen Lauf (Pruefbericht K2) - sie ist dann die einzige Abschrift und bleibt, auch ohne Marke.
+        if [ ! -L "$SICHER" ] && [ -s "$SICHER/config/kodi.json" ]; then
+            echo "<INFO> Die Sicherung eines abgebrochenen Laufs bleibt liegen und wird zurueckgestellt ($SICHER)."
+        elif [ "$KO_MARKE_VORHER" = "1" ]; then
             echo "<INFO> Die Sicherung unter $SICHER bleibt liegen: ein frueherer Versuch"
             echo "<INFO> dieses Updates hat abgebrochen (seine Marke lag noch), sie ist die"
             echo "<INFO> einzige Abschrift und wird im naechsten Schritt zurueckgestellt."

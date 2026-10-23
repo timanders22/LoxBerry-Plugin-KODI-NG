@@ -53,6 +53,13 @@ fi
 # Umbenennung auf kodi_ng. Griff er, sicherte bzw. suchte dieses
 # Skript in einem Verzeichnis, das es nicht mehr gibt.
 PDIR="${ARGV3:-kodi_ng}"
+# K5 (1.2.22, Hausform Matter2Lox 0.9.44): der Ordnername kommt vom Installer aus der eigenen plugin.cfg;
+# trotzdem kein Pfadtrenner, kein ".." und nicht "." oder ".." selbst - alle rm -rf haengen ihn an.
+case "$PDIR" in
+    ''|.|..|*/*|*..*)
+        echo "<FAIL> Unzulaessiger Ordnername '$PDIR' - es wird nichts zurueckgestellt und nichts geloescht."
+        exit 1 ;;
+esac
 if [ -z "$BASE" ]; then
     echo "<FAIL> Das Wurzelverzeichnis des LoxBerry war nicht zu ermitteln (fuenftes"
     echo "<FAIL> Argument: '$ARGV5', LBHOMEDIR: '$LBHOMEDIR', Suche ab dem Ablageort"
@@ -64,6 +71,23 @@ if [ -z "$BASE" ]; then
     exit 1
 fi
 SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
+# K1 (1.2.22, Entscheidung 2 vom 23.10.2026; aendert Entscheidung 1 vom 29.09.): die Marke einer laufenden
+# Aktualisierung faellt HIER, erst nach dem geprueften Zurueckstellen. Bis 1.2.21 entfernte postinstall.sh sie per
+# trap - brach das Update zwischen postinstall und postupgrade ab, hielt der zweite Anlauf eine verwaiste
+# Sicherung fuer fremd und raeumte sie weg (Pruefbericht Fall D). Im Fehlerzweig bleibt sie liegen; die
+# Befehlsbruecke startet bis dahin nicht, und ihre Befehle quittieren AKTUALISIERUNG.
+MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
+
+# K3 (1.2.22, Bauart EVCC 0.9.47 postupgrade.sh): jede Datei DER SICHERUNG muss im Ziel bytegleich stehen.
+# Bis 1.2.21 stand hier "diff -r" ueber den ganzen Konfigordner - seit 1.2.13 legt der Installer dort aber
+# config/mqtt_subscriptions.cfg aus dem Paket ab, und eine Sicherung aus 1.2.12 oder frueher kennt sie nicht:
+# "Only in", <FAIL>, Rueckgabe 1, und die Sicherung mit dem Kodi-Kennwort blieb liegen (Pruefbericht Fall B;
+# das Haus steht auf 1.2.11).
+ko_sicherung_gleich() {
+    ( cd "$1" 2>/dev/null && find . -type f ) | while IFS= read -r ko_f; do
+        cmp -s "$1/$ko_f" "$2/$ko_f" || exit 1
+    done
+}
 
 mkdir -p "$BASE/config/plugins/$PDIR" 2>/dev/null
 
@@ -78,15 +102,16 @@ fi
 # Sicherung aus einem frueheren Vorgang weggeraeumt und nur die eines
 # abgebrochenen Versuchs dieses Updates stehen lassen (dessen Marke lag noch).
 # Bei einer Neuinstallation laeuft dieses Skript nicht; dort legt
-# postinstall.sh eine liegengebliebene Sicherung nach .alt. Die Marke selbst
-# ist hier schon fort - postinstall.sh entfernt sie per trap.
+# postinstall.sh eine liegengebliebene Sicherung nach .alt. Die Marke liegt
+# hier noch (seit 1.2.22, K1) und faellt erst nach dem geprueften Zurueckstellen.
 if [ -d "$SICHER/config" ] && [ -n "$(ls -A "$SICHER/config" 2>/dev/null)" ]; then
     # Erst pruefen, dann die Sicherung loeschen. Bis 1.2.7 hiess es
     # "zurueckgestellt", auch wenn cp scheiterte - und danach war die
     # Sicherung weg. Jetzt bleibt sie in diesem Fall liegen.
     if cp -a "$SICHER/config/." "$BASE/config/plugins/$PDIR/" \
-       && diff -r "$SICHER/config" "$BASE/config/plugins/$PDIR" >/dev/null 2>&1; then
+       && ko_sicherung_gleich "$SICHER/config" "$BASE/config/plugins/$PDIR"; then
         echo "<OK> Konfiguration zurueckgestellt."
+        rm -f "$MARKE" 2>/dev/null
     else
         echo "<FAIL> Die Konfiguration liess sich NICHT vollstaendig zurueckstellen."
         echo "<FAIL> Die Sicherung bleibt unter $SICHER/config liegen;"
@@ -96,6 +121,7 @@ if [ -d "$SICHER/config" ] && [ -n "$(ls -A "$SICHER/config" 2>/dev/null)" ]; th
     fi
 else
     echo "<INFO> Keine gesicherte Konfiguration gefunden - nichts zurueckzustellen."
+    rm -f "$MARKE" 2>/dev/null
 fi
 
 chown -R loxberry:loxberry "$BASE/config/plugins/$PDIR" 2>/dev/null

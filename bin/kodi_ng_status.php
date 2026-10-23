@@ -24,7 +24,8 @@
  *
  * ZWEI GESCHWINDIGKEITEN (seit 1.2.7)
  *   jeder Cron-Durchgang   das Lebenszeichen: zeitstempel, herzschlag,
- *                          status/ok - nie retained (Regeln/07, Hausstandard
+ *                          status/ok, seit 1.2.22 status/zaehler und
+ *                          status/ts - nie retained (Regeln/07, Hausstandard
  *                          seit 26.08.2026: "ts geht bei jedem Durchgang
  *                          hinaus"). status/ok ging von 1.2.7 bis 1.2.9
  *                          entgegen diesem Satz retained hinaus (Tabelle in
@@ -224,6 +225,10 @@ $ko_werte = array(
     'zeitstempel' => $ko_jetzt_ts,
     'herzschlag'  => $ko_zaehler + 1,
     'status/ok'   => $ko_helfer ? 1 : 0,
+    /* 1.2.22 (Entwurf Gruppe 10, 2.2, E7): Lebenszeichen nach Hausform, nie retained, im selben Lauf -
+     * status/zaehler laeuft 0 bis 999 um, status/ts in Unix-Sekunden. */
+    'status/zaehler' => ($ko_zaehler + 1) % 1000,
+    'status/ts'   => $ko_jetzt_ts,
 );
 
 /* ALTWERTE ABRAEUMEN - bis der BROKER bestaetigt, dass nichts mehr dasteht.

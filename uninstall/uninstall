@@ -15,6 +15,16 @@
 #
 # Der Benutzer kodi samt /home/kodi bleibt bewusst stehen (siehe unten).
 
+# PRAEFIXSCHUTZ (seit 1.2.22; Uninstall-Praefix-Falle, am Geraet gemessen 08.10.2026 an zigbee2mqtt/
+# zigbee2mqttng): plugininstall.pl fuehrt beim Deinstallieren JEDES data/system/uninstall/<name>* aus - auch
+# dieses Skript, wenn ein Plugin deinstalliert wird, dessen NAME ein Praefix von "kodi_ng" ist (etwa das alte
+# Plugin "kodi"). $2 ist dann der Name DES ANDEREN Plugins. Ein fremder Name heisst: nichts anfassen - auch
+# nicht den Kodi-Dienst. Bauart Matter2Lox 0.9.42.
+if [ -n "${2:-}" ] && [ "${2:-}" != "kodi_ng" ]; then
+    echo "<INFO> Kodi NG: aufgerufen fuer das Plugin '${2:-}', nicht fuer kodi_ng - nichts angefasst."
+    exit 0
+fi
+
 echo "<INFO> Beende den Kodi-Dienst"
 systemctl stop kodi_ng 2>/dev/null || true
 systemctl disable kodi_ng 2>/dev/null || true
@@ -171,6 +181,13 @@ echo "<INFO> Kodi selbst bleibt installiert: sudo apt purge kodi"
 # ohne ihn blieb bei fehlenden Argumenten alles liegen, waehrend die
 # Schlusszeile "Alles entfernt" meldete.
 UN_FOLDER="${3:-kodi_ng}"
+# K5 (1.2.22, Hausform Matter2Lox 0.9.44): der Ordnername kommt vom Installer aus der eigenen plugin.cfg;
+# trotzdem kein Pfadtrenner, kein ".." und nicht "." oder ".." selbst - alle rm -rf haengen ihn an.
+case "$UN_FOLDER" in
+    ''|.|..|*/*|*..*)
+        echo "<WARNING> Unzulaessiger Ordnername '$UN_FOLDER' - neben dem Plugin-Ordner wird nichts entfernt."
+        exit 0 ;;
+esac
 
 # DIE WURZEL WIRD GESUCHT, NICHT GESETZT - Hausmuster aus REGELN_2.
 #
@@ -250,6 +267,59 @@ if [ -z "$UN_BASE" ]; then
     echo "<WARNING> In den ersten beiden steht das Kodi-Passwort im Klartext."
 fi
 
+# ---------- Befehlsbruecke (seit 1.2.22) ----------
+# Gruppe 10 (Entwurf 3.5; Bauart Matter2Lox 0.9.44): anhalten (stop beendet Dienst UND mosquitto_sub), dann
+# argumentweise nachzaehlen, verwaiste mosquitto_sub mit unseren Optionsdateien beenden. Die Optionsdateien mit dem
+# Broker-Zugang (befehle/mosquitto/mosquitto_sub|_pub) werden VOR dem Loeschen ueberschrieben und entfernt -
+# LoxBerry raeumt den Datenordner erst nach diesem Skript. Der Praefixschutz steht oben (fremder Name: nichts tun).
+# Ohne Wurzel wird nichts gesucht und nichts beendet.
+if [ -n "$UN_BASE" ]; then
+    BBSH="$UN_BASE/bin/plugins/$UN_FOLDER/befehlsbruecke.sh"
+    BBPHP="$UN_BASE/bin/plugins/$UN_FOLDER/befehlsbruecke.php"
+    BBDIR="$UN_BASE/data/plugins/$UN_FOLDER/befehle"
+    if [ -f "$BBSH" ]; then
+        KO_AUS=$(timeout 40 bash "$BBSH" stop 2>&1)
+        echo "<INFO> Befehlsbruecke: ${KO_AUS:-keine Antwort}"
+    fi
+    KO_REST=0
+    for d in /proc/[0-9]*; do
+        mapfile -d '' -t a 2>/dev/null < "$d/cmdline" || continue
+        [ "${#a[@]}" -ge 2 ] || continue
+        if [ "${a[1]}" = "$BBPHP" ] && [[ "${a[0]}" =~ (^|/)php[0-9.]*$ ]]; then
+            kill -9 "${d#/proc/}" 2>/dev/null && KO_REST=$((KO_REST + 1))
+        fi
+    done
+    KO_ABO=0
+    for d in /proc/[0-9]*; do
+        c=""
+        read -r c 2>/dev/null < "$d/comm"
+        [ "$c" = "mosquitto_sub" ] || continue
+        mapfile -d '' -t e 2>/dev/null < "$d/environ" || continue
+        for x in "${e[@]}"; do
+            if [ "$x" = "XDG_CONFIG_HOME=$BBDIR/mosquitto" ]; then
+                kill -9 "${d#/proc/}" 2>/dev/null && KO_ABO=$((KO_ABO + 1)); break
+            fi
+        done
+    done
+    [ "$KO_REST" -gt 0 ] && echo "<WARNING> Befehlsbruecke: $KO_REST Dienst(e) erst mit kill -9 beendet."
+    [ "$KO_ABO" -gt 0 ] && echo "<WARNING> $KO_ABO mosquitto_sub mit den Optionsdateien des Plugins erst mit kill -9 beendet."
+    KO_OPT=0
+    KO_OPTREST=""
+    for KO_F in "$BBDIR/mosquitto/mosquitto_sub" "$BBDIR/mosquitto/mosquitto_pub"; do
+        [ -f "$KO_F" ] || continue
+        KO_N=$(stat -c %s "$KO_F" 2>/dev/null || echo 64)
+        [ "$KO_N" -gt 0 ] 2>/dev/null && head -c "$KO_N" /dev/zero > "$KO_F" 2>/dev/null
+        rm -f "$KO_F" 2>/dev/null
+        if [ -e "$KO_F" ]; then KO_OPTREST="$KO_OPTREST $KO_F"; else KO_OPT=$((KO_OPT + 1)); fi
+    done
+    if [ -n "$KO_OPTREST" ]; then
+        echo "<WARNING> Optionsdateien mit dem Broker-Zugang liegen noch:$KO_OPTREST - bitte von Hand entfernen."
+    elif [ "$KO_OPT" -gt 0 ]; then
+        echo "<OK> $KO_OPT Optionsdateien der Befehlsbruecke (Broker-Zugang) ueberschrieben und entfernt."
+    fi
+fi
+
+
 # ---------- Was nur das Plugin in Kodi brauchte (Befund I4, 29.09.2026) ----------
 #
 # Paket kodi und /home/kodi bleiben (siehe oben). Bis 1.2.11 blieben dort aber
@@ -294,7 +364,11 @@ elif [ -z "$UN_BASE" ] || [ ! -f "$KO_ADVPAKET" ]; then
     echo "<WARNING> Die mitgelieferte advancedsettings.xml war nicht zu finden - ob"
     echo "<WARNING> $KO_ADVUSER vom Plugin stammt, ist nicht zu entscheiden. Sie bleibt;"
     echo "<WARNING> das Plugin hatte darin esallinterfaces, webserver und zeroconf eingeschaltet."
-elif cmp -s "$KO_ADVUSER" "$KO_ADVPAKET"; then
+# Seit 1.2.22 (Entwurf 3.6) kann der Haken "Kodis Fernsteuerung aus dem Heimnetz zulassen" darin
+# esallinterfaces auf false gestellt haben - auch das ist die Datei des Plugins.
+elif cmp -s "$KO_ADVUSER" "$KO_ADVPAKET" \
+     || sed 's#<esallinterfaces>true</esallinterfaces>#<esallinterfaces>false</esallinterfaces>#' "$KO_ADVPAKET" \
+        | cmp -s - "$KO_ADVUSER"; then
     if [ -f "$KO_ADVSICHER" ]; then
         if mv -f "$KO_ADVSICHER" "$KO_ADVUSER" 2>/dev/null; then
             echo "<OK> advancedsettings.xml: die Datei von vor der ersten Installation ist"

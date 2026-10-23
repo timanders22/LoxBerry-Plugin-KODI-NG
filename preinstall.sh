@@ -49,7 +49,7 @@ if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugi
 fi
 # Der Ordnername darf keinen Pfadtrenner tragen, sonst griffe mv/rm daneben.
 case "$PFOLDER" in
-    ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
+    ''|.|..|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
 esac
 
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"

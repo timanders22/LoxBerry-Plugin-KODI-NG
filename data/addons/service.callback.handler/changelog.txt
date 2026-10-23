@@ -1,3 +1,8 @@
+v3.2.2
+- Nur Beschreibung (addon.xml): "all topics except event retained" - event geht seit 3.2.1 fluechtig
+  hinaus (NIE_RETAIN in default.py). Kein Code geaendert. Kodi uebernimmt eine geaenderte Beschreibung nur
+  mit neuer Fassungsnummer (Kodi NG 1.2.22, K12).
+
 v1.0
 - Initial version
 

@@ -225,16 +225,36 @@ if (!function_exists('ko_vorgaben')) {
             'kodi_port'   => '8080',
             'kodi_user'   => '',
             'kodi_pass'   => '',
-            /* AB WERK AUS. Der Statussender veroeffentlicht Themen im Broker;
-             * eine bestehende Anlage bekaeme sie mit dem Update ungefragt.
-             * "Neue Funktionen ab Werk aus" - der Reiter Test sagt deutlich,
-             * dass er aus ist, damit niemand vergeblich auf Werte wartet. */
-            'sender_ein'  => '0',
+            /* AB WERK AN - NUR FUER NEUINSTALLATIONEN (1.2.22, stehende
+             * Entscheidung "MQTT ab Werk an, nur Neuinstallationen"; Entwurf
+             * Gruppe 10, 2.7, E6). Die Vorgabe wirkt nur, wo kodi.json den
+             * Schluessel noch nicht traegt - das ist die Neuinstallation, die
+             * Datei entsteht beim ersten Speichern. Bestehende Anlagen tragen
+             * ihn seit 1.2.7 (ko_cfg_vervollstaendigen) und behalten ihren
+             * Wert; ein Update schaltet also nichts ungefragt ein. Ohne
+             * kodi.json steigt cron.01min weiter vor dem Sender aus: ab Werk an
+             * heisst "ab dem ersten Speichern". Ohne den Sender fehlt dem
+             * Musterprojekt das Lebenszeichen. Bis 1.2.21 stand hier '0'. */
+            'sender_ein'  => '1',
             'sender_takt' => '300',
             /* Der Aufruf von Kodi ueber JSON-RPC ist im Hause nicht an einem
              * Geraet erprobt worden - es lief keines. Deshalb ein eigener
              * Schalter, ebenfalls ab Werk aus. */
             'rpc_ein'     => '0',
+            /* Befehle ueber MQTT (1.2.22, Entwurf Gruppe 10, 3.3, E1-E3): die
+             * gemeinsame Befehlsbruecke nimmt <praefix>/befehl/... an; der
+             * zweite Haken laesst zusaetzlich das eingreifende "beenden" zu.
+             * Beide ab Werk aus - jeder im Heimnetz kann ueber den UDP-Eingang
+             * des MQTT-Gateways Befehle senden. */
+            'befehle_mqtt_ein'     => '0',
+            'befehle_mqtt_steuern' => '0',
+            /* Kodis Fernsteuerung aus dem Heimnetz (1.2.22, Entwurf 3.6, E4):
+             * <esallinterfaces> in der advancedsettings.xml - JSON-RPC TCP 9090
+             * und EventServer UDP 9777 fuer andere Rechner. Vorgabe 1 fuer
+             * Update UND Neuinstallation (wie bisher; keine
+             * Verhaltensaenderung). Aus: nur noch fuer den LoxBerry selbst,
+             * nach einem Neustart von Kodi; die Bruecke wirkt weiter. */
+            'fernsteuerung_netz_ein' => '1',
         );
     }
 }
@@ -334,6 +354,9 @@ if (!function_exists('ko_wert_pruefen')) {
                 return preg_match('/[\x00-\x1F\x7F]/', $w) ? null : $w;
             case 'sender_ein':
             case 'rpc_ein':
+            case 'befehle_mqtt_ein':
+            case 'befehle_mqtt_steuern':
+            case 'fernsteuerung_netz_ein':
                 return in_array($w, array('0', '1'), true) ? $w : null;
             case 'sender_takt':
                 if (!preg_match('/^[0-9]{1,5}$/', $w)) { return null; }
@@ -1027,6 +1050,8 @@ if (!function_exists('ko_adv_lesen')) {
             'vorhanden' => !empty($j['vorhanden']),
             'webserver' => isset($j['webserver']) ? (string) $j['webserver'] : '',
             'port'      => isset($j['port']) ? (string) $j['port'] : '',
+            // 1.2.22 (Entwurf 3.6): esallinterfaces - true, false oder '' (nicht gesetzt bzw. alter Helfer).
+            'netz'      => isset($j['netz']) ? (string) $j['netz'] : '',
             'datei'     => isset($j['datei']) ? (string) $j['datei'] : '',
         );
         return $a;
@@ -1524,7 +1549,9 @@ if (!function_exists('ko_mqtt_behalten_liste')) {
 
         $errno = 0;
         $errstr = '';
-        $s = @stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, 2);
+        // K9 (1.2.22): ein IPv6-Literal braucht die Klammerform - "tcp://::1:1883" scheiterte unter 7.4/8.4/8.5
+        // mit Fehler 10049 (Probe k9.php), dann galt der Broker als "nicht zu fragen".
+        $s = @stream_socket_client('tcp://' . ko_wirt_form($host) . ':' . $port, $errno, $errstr, 2);
         if (!$s) { return $aus; }
         stream_set_timeout($s, 1);
 
@@ -1731,7 +1758,68 @@ if (!function_exists('ko_mqtt_leer_themen')) {
  * 2 nicht moeglich.
  */
 if (!function_exists('ko_mqtt_leeren')) {
+    /* K14 (1.2.22): nach dem Lauf fuer das Praefix der Konfiguration auch das des Kodi-Addons, wenn es
+     * abweicht (ko_mqtt_leeren_addon()). Rueckgabe: die groessere der beiden. */
     function ko_mqtt_leeren($runden = 3, $pause_us = 1000000)
+    {
+        $rc = ko_mqtt_leeren_haupt($runden, $pause_us);
+        return max($rc, ko_mqtt_leeren_addon($runden, $pause_us));
+    }
+}
+
+/**
+ * K14 (1.2.22, Pruefbericht K14): hat das Kodi-Addon ein ANDERES, gueltiges Praefix (Warnung
+ * ADDON.THEMA_ABWEICHUNG im Reiter MQTT), bleiben dessen retained Themen nach der Deinstallation stehen -
+ * bis 1.2.21 leerte ko_mqtt_leeren() nur mqtt_topic aus kodi.json. Ein zweiter ko_mqtt_leeren_lauf() nur mit
+ * den Addon-Themen (quelle addon: die fuenf retained Titel und screensaver, dazu event als Altlast), eigene
+ * Ausgabezeile. Nicht lesbar: <INFO>, nicht geprueft. Rueckgabe wie ko_mqtt_leeren().
+ */
+if (!function_exists('ko_mqtt_leeren_addon')) {
+    function ko_mqtt_leeren_addon($runden = 3, $pause_us = 1000000)
+    {
+        $prefix = ko_praefix();
+        $a = ko_addon_lesen();
+        if (!is_array($a)) {
+            echo "<INFO> MQTT: das Praefix des Kodi-Addons war nicht lesbar - nicht geprueft.\n";
+            return 0;
+        }
+        $ap = isset($a['mqtt_topic']) ? trim((string) $a['mqtt_topic']) : '';
+        if ($ap === '' || $ap === $prefix) { return 0; }
+        if (ko_wert_pruefen('mqtt_topic', $ap) !== $ap) {
+            echo "<INFO> MQTT: das Praefix des Kodi-Addons ist unzulaessig - seine Themen wurden nicht geleert.\n";
+            return 0;
+        }
+        $themen = array();
+        foreach (ko_themen() as $t) {
+            if ($t['quelle'] === 'addon') { $themen[] = $t['name']; }
+        }
+        $e = ko_mqtt_leeren_lauf($ap, $themen, $runden, $pause_us);
+        $wo = 'unter dem abweichenden Praefix des Kodi-Addons ' . $ap . '/';
+        switch ($e['lage']) {
+            case 'nichts':
+                echo "<OK> MQTT: der Broker bestaetigt: keines der " . $e['n'] . " Addon-Themen " . $wo . " steht zurueckbehalten.\n";
+                return 0;
+            case 'geleert':
+                echo "<OK> MQTT: " . $e['zu_leeren'] . " Addon-Themen " . $wo . " geleert; der Broker bestaetigt es.\n";
+                return 0;
+            case 'offen':
+                echo "<WARNING> MQTT: " . count($e['offen']) . " Addon-Themen " . $wo . " stehen noch zurueckbehalten. Von Hand: mosquitto_pub -r -n -t <thema>\n";
+                return 1;
+            case 'ungeprueft':
+                echo "<INFO> MQTT: " . $e['zu_leeren'] . " Addon-Themen " . $wo . " mit leerer Nutzlast gesendet - nicht nachgelesen.\n";
+                return 0;
+            case 'udp_zu':
+                echo "<WARNING> MQTT: der UDP-Eingang war nicht erreichbar - Addon-Themen " . $wo . " nicht geleert.\n";
+                return 1;
+        }
+        echo "<INFO> MQTT: Addon-Themen " . $wo . " nicht geleert (" . $e['lage'] . ").\n";
+        return 2;
+    }
+}
+
+/** Der Lauf fuer das Praefix der Konfiguration - bis 1.2.21 der Rumpf von ko_mqtt_leeren(), unveraendert. */
+if (!function_exists('ko_mqtt_leeren_haupt')) {
+    function ko_mqtt_leeren_haupt($runden = 3, $pause_us = 1000000)
     {
         $cfg = ko_config();
         $prefix = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
@@ -1953,6 +2041,16 @@ if (!function_exists('ko_themen')) {
              * Pruefzeile "Lebenszeichen" im Reiter Test haelt es mit. */
             array('name' => 'status/ok',   'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
                   'min' => '0', 'max' => '1',          'schl' => 'T_OK',          'wschl' => 'V_OK'),
+            /* Lebenszeichen nach Hausform (1.2.22, Entwurf Gruppe 10, 2.2, E7):
+             * status/zaehler = herzschlag % 1000 (0-999, laeuft um) und
+             * status/ts = zeitstempel, nie retained, im selben Lauf. An ihm
+             * haengt die Ausfallerkennung des Musterprojekts (Max 999 statt
+             * 2147483647). herzschlag und zeitstempel bleiben fuer bestehende
+             * Anlagen; ihr Wegfall erst nach der Hauswelle (Sammelstelle). */
+            array('name' => 'status/zaehler', 'quelle' => 'plugin', 'zahl' => true, 'retain' => false, 'leben' => true,
+                  'min' => '0', 'max' => '999',        'schl' => 'T_ZAEHLER',     'wschl' => 'V_ZAEHLER'),
+            array('name' => 'status/ts',   'quelle' => 'plugin', 'zahl' => true,  'retain' => false, 'leben' => true,
+                  'min' => '0', 'max' => '4102444800', 'schl' => 'T_TS',          'wschl' => 'V_ZEIT'),
             array('name' => 'wiedergabe',  'quelle' => 'plugin', 'zahl' => false, 'retain' => true,  'leben' => false,
                   'min' => '',  'max' => '',           'schl' => 'T_WIEDERGABE',  'wschl' => 'V_WIEDERGABE'),
             array('name' => 'titel',       'quelle' => 'plugin', 'zahl' => false, 'retain' => true,  'leben' => false,
@@ -1982,26 +2080,9 @@ if (!function_exists('ko_themen')) {
     }
 }
 
-/**
- * Gehoert das Thema in die Vorlage der virtuellen Eingaenge?
- *
- * EINE Stelle fuer die Tabelle im Reiter und fuer die erzeugte Datei - bis
- * 1.2.6 prueften beide verschieden viele Bedingungen.
- *
- * erreichbar nur bei eingeschaltetem JSON-RPC. Ab Werk ist die Abfrage aus;
- * bis 1.2.6 legte die Vorlage den Eingang trotzdem mit DefVal 0 an, und in
- * Loxone stand dauerhaft "Kodi antwortet nicht" statt "danach fragt niemand"
- * (Regeln/07: die Vorlage legt nur an, was auch geliefert wird).
- */
-if (!function_exists('ko_thema_in_vorlage')) {
-    function ko_thema_in_vorlage($t, $cfg = null)
-    {
-        if ($cfg === null) { $cfg = ko_config(); }
-        if (empty($t['zahl']) || $t['quelle'] !== 'plugin') { return false; }
-        if ($t['name'] === 'erreichbar' && (string) $cfg['rpc_ein'] !== '1') { return false; }
-        return true;
-    }
-}
+/* ko_thema_in_vorlage() ist mit 1.2.22 entfallen: es entschied, welche Themen in die Eingangsvorlage
+ * (VirtualInHttp) kamen - die Vorlage selbst ist entfallen (Entscheidung 1, Entwurf Gruppe 10, 2.6). Die
+ * Namen nennt die Namenstabelle ko_mqtt_namen(). */
 
 /** Wie viele Themen sendet das Plugin mit der jetzigen Einstellung?
  *  Die Zahl wird GEZAEHLT, nicht in einen Text geschrieben - "die sieben
@@ -2356,7 +2437,6 @@ if (!function_exists('ko_addon_soll')) {
     function ko_addon_soll()
     {
         $cfg = ko_config();
-        $ip = ko_lokale_ip();
         /* Der Wertebereich des Ports steht HIER und genau einmal.
          *
          * Der Helfer prueft nur die ZEICHEN (bis fuenf Ziffern) - er ist die
@@ -2369,7 +2449,14 @@ if (!function_exists('ko_addon_soll')) {
         $port = ko_mqtt_port();
         return array(
             'mqtt_enable'  => 'true',
-            'mqtt_address' => $ip,
+            /* K10 (1.2.22): 127.0.0.1 statt der LAN-Adresse. Das Addon laeuft immer
+             * im oertlichen Kodi (postroot.sh spielt es nach /home/kodi ein), der
+             * UDP-Eingang des Gateways ist oertlich erreichbar, und eine LAN-Adresse
+             * veraltet bei einem DHCP-Wechsel; ueber IPv6 oder localhost aufgerufen
+             * war sie leer. ko_lokale_ip() bleibt fuer ko_sicht_wirt(). Bestehende
+             * Anlagen zeigen im Reiter MQTT einmal "abweichend", bis der Knopf
+             * gedrueckt ist. */
+            'mqtt_address' => '127.0.0.1',
             'mqtt_udpport' => ($port >= 1 && $port <= 65535) ? (string) $port : '',
             'mqtt_topic'   => $cfg['mqtt_topic'],
         );
@@ -3058,63 +3145,16 @@ if (!function_exists('ko_sprache_fehlt')) {
    Loxone-Vorlagen
    ================================================================ */
 
-/**
- * Vorlage der Gateway-Eingaenge nach dem Heimkino-Kunstgriff:
- * VirtualInHttp mit Dummy-Adresse http://localhost und Abfragezyklus
- * 604800 s, nur damit Loxone die richtig benannten Eingaenge anlegt - die
- * Werte kommen vom MQTT-Gateway. Format wie Original-Export aus Loxone
- * Config 17.1.
- *
- * Enthalten sind AUSSCHLIESSLICH die Zahlenwerte aus ko_themen(). Textthemen
- * bekommen keinen virtuellen Eingang, auch nicht im XML-Weg.
- */
-if (!function_exists('ko_vorlage')) {
-    function ko_vorlage()
-    {
-        $cfg = ko_config();
-        $topic = $cfg['mqtt_topic'] !== '' ? $cfg['mqtt_topic'] : 'kodi';
-        /* Der Satz zum Abo haengt an der FASSUNG des Gateways - wie im Reiter.
-         * Bis 1.2.6 stand hier der V1-Satz ("Abo <thema>/# noetig")
-         * unbedingt, und ein V2-Anwender las in Loxone Config das Gegenteil
-         * dessen, was die Oberflaeche daneben sagte. Ist die Fassung nicht
-         * lesbar, stehen beide Saetze da. */
-        $gw = ko_mqtt_gateway_info();
-        $fassung = $gw === null ? 0 : (int) $gw['fassung'];
-        $abo_v1 = 'Gateway V1: Abo ' . $topic . '/# eintragen.';
-        $abo_v2 = 'Gateway V2: in den Abonnements die Datenpunkte anhaken, einzutragen ist nichts.';
-        $abo = $fassung >= 2 ? $abo_v2 : ($fassung === 1 ? $abo_v1 : $abo_v1 . ' ' . $abo_v2);
-        $crlf = "\r\n";
-        $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-        $o .= '<VirtualInHttp HintText="" Title="Kodi Zustand" Comment="'
-            . htmlspecialchars('Erzeugt vom LoxBerry-Plugin Kodi NG (' . date('d.m.Y')
-                . '). Werte kommen vom MQTT-Gateway. ' . $abo . ' Loxone Config legt beim Import '
-                . 'neu an und überschreibt nichts - zweimal eingelesen ergibt doppelte Bausteine.',
-                ENT_QUOTES | ENT_XML1, 'UTF-8')
-            . '" Address="http://localhost" PollingTime="604800">' . $crlf;
-        $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
-        foreach (ko_themen() as $t) {
-            if (!ko_thema_in_vorlage($t, $cfg)) { continue; }
-            /* Der Titel ist der Name, den das Gateway vergibt: aus
-             * kodi/status/ok wird kodi_status_ok. Der Comment ist der
-             * ANZEIGENAME in Loxone Config und traegt den Vorsatz "Kodi: "
-             * (Regeln/07) - wie seit 1.2.6 die Steuerbefehle. */
-            $gwname = $topic . '_' . $t['name'];
-            $gwname = str_replace('/', '_', $gwname);
-            $o .= "\t" . '<VirtualInHttpCmd Title="'
-                . htmlspecialchars($gwname, ENT_QUOTES | ENT_XML1, 'UTF-8') . '" ';
-            $o .= 'Comment="' . htmlspecialchars(ko_t('VIBESCH.' . strtoupper(str_replace('/', '_', $t['name']))),
-                ENT_QUOTES | ENT_XML1, 'UTF-8') . '" Check=" " ';
-            $o .= 'Signed="false" Analog="true" SourceValLow="0" DestValLow="0" '
-                . 'SourceValHigh="1" DestValHigh="1" DefVal="0" MinVal="' . $t['min']
-                . '" MaxVal="' . $t['max'] . '" Unit="&lt;v.0&gt;" HintText=""/>' . $crlf;
-        }
-        $o .= '</VirtualInHttp>' . $crlf;
-        return array('VI_kodi_ng.xml', $o);
-    }
-}
+/* ko_vorlage() ist mit 1.2.22 ENTFALLEN (Entscheidung 1 vom 23.10.2026, Entwurf Gruppe 10, 2.6; Pruefbericht
+ * E4): sie erzeugte die Eingaenge ueber den VirtualInHttp-Kunstgriff (Address http://localhost, PollingTime
+ * 604800) - das verstoesst gegen "Gateway-Werte = Virtueller Eingang". Die Namen nennt jetzt die
+ * Namenstabelle (ko_mqtt_namen(), Reiter Einbindung mit Kopierknopf). */
 
 /**
  * Die Steuerbefehle als VirtualOut.
+ *
+ * 1.2.22: bleibt BYTE-GLEICH fuer bestehende Anlagen und Fremdsysteme (Entwurf Gruppe 10, 2.6/3.6, E13) - im
+ * Reiter Einbindung zugeklappt; das Musterprojekt sendet ueber MQTT (ko_vorlage_mqtt_out()).
  *
  * Sie gehen an Kodis TCP-Schnittstelle (Port 9090), nicht ueber den LoxBerry -
  * der Ordnername des Plugins kommt in keiner Loxone-Adresse vor.
@@ -3203,5 +3243,551 @@ if (!function_exists('ko_vorlage_vo')) {
         }
         $o .= '</VirtualOut>' . $crlf;
         return array('VQ_kodi_ng_steuern.xml', $o);
+    }
+}
+
+/* ================================================================
+   Gruppe 10 (1.2.22): Befehle ueber MQTT, Namenstabelle, Vorlage MQTT-Befehle
+   ================================================================
+
+   Entwurf Gruppe 10 (Musterprojekt/entwurf_gruppe10_ko.txt) Abschnitte 2.4, 3.2-3.9, Entscheidungen E1-E9 vom
+   23.10.2026. Die 26 Steuerbefehle aus ko_vo_befehle() gehen zusaetzlich ueber die gemeinsame Befehlsbruecke
+   (bin/befehlsbruecke.php, Stammfassung, byte-gleich): Loxone -> UDP-Eingang des MQTT-Gateways
+   "publish <praefix>/befehl/<name> 1" -> Broker -> Bruecke -> ko_bb_tun() -> ko_rpc() (HTTP an Kodi, Kennwort nur
+   in der Kopfzeile, Frist 3 s). Kein HTTP auf das Plugin selbst, kein Kindprozess, keine Auftragsdatei - Kodi NG
+   hat keinen eigenen Dienst, und ein JSON-RPC-Aufruf ist kurz. Die TCP-Vorlage ko_vorlage_vo() bleibt byte-gleich
+   (E13). */
+
+/**
+ * Je Befehl aus ko_vo_befehle() (Schluessel = Sprachschluessel $c[1], DIESELBE Reihenfolge): Brueckenname,
+ * JSON-RPC-Methode, Parameter, Spieler noetig, eingreifend. EINE Tabelle neben ko_vo_befehle(); die Pruefzeile
+ * "Befehlstabellen" im Reiter Test haelt beide gegeneinander.
+ *
+ * Spieler-Befehle holen den laufenden Spieler ueber Player.GetActivePlayers (eigener Fund F1: die TCP-Vorlage setzt
+ * playerid 1 fest - nach Kodis Doku ist Musik playerid 0). Seek als Objekt {"step": ...} (F2, JSON-RPC v10 /
+ * Kodi 18), SetMute mit Pflichtfeld "mute" (F3). F1-F3 sind aus der Doku geschlossen, nicht an einem Kodi gemessen.
+ * Eingreifend ist nur "beenden" (E2): Kodi bleibt danach aus bis zum Start im Plugin oder zum Neustart.
+ */
+if (!function_exists('ko_mqtt_befehle')) {
+    function ko_mqtt_befehle()
+    {
+        return array(
+            'V_BACK'      => array('taste/zurueck', 'Input.Back', null, false, false),
+            'V_CONTEXT'   => array('taste/kontextmenue', 'Input.ContextMenu', null, false, false),
+            'V_DOWN'      => array('taste/ab', 'Input.Down', null, false, false),
+            'V_HOME'      => array('taste/start', 'Input.Home', null, false, false),
+            'V_INFO'      => array('taste/info', 'Input.Info', null, false, false),
+            'V_LEFT'      => array('taste/links', 'Input.Left', null, false, false),
+            'V_RIGHT'     => array('taste/rechts', 'Input.Right', null, false, false),
+            'V_SELECT'    => array('taste/ok', 'Input.Select', null, false, false),
+            'V_OSD'       => array('taste/leiste', 'Input.ShowOSD', null, false, false),
+            'V_UP'        => array('taste/auf', 'Input.Up', null, false, false),
+            'V_SEEK_VOR'  => array('wiedergabe/vorspulen', 'Player.Seek', array('value' => array('step' => 'smallforward')), true, false),
+            'V_SEEK_ZUR'  => array('wiedergabe/zurueckspulen', 'Player.Seek', array('value' => array('step' => 'smallbackward')), true, false),
+            'V_STOP'      => array('wiedergabe/stopp', 'Player.Stop', array(), true, false),
+            'V_PLAY'      => array('wiedergabe/abspielen', 'Player.PlayPause', array('play' => true), true, false),
+            'V_PAUSE'     => array('wiedergabe/pause', 'Player.PlayPause', array('play' => false), true, false),
+            'V_PLAYPAUSE' => array('wiedergabe/umschalten', 'Player.PlayPause', array('play' => 'toggle'), true, false),
+            'V_NEXT'      => array('wiedergabe/weiter', 'Player.GoTo', array('to' => 'next'), true, false),
+            'V_PREV'      => array('wiedergabe/zurueck', 'Player.GoTo', array('to' => 'previous'), true, false),
+            'V_PAGEDOWN'  => array('taste/seite_ab', 'Input.ExecuteAction', array('action' => 'pagedown'), false, false),
+            'V_PAGEUP'    => array('taste/seite_auf', 'Input.ExecuteAction', array('action' => 'pageup'), false, false),
+            'V_VOL_AUF'   => array('ton/lauter', 'Application.SetVolume', array('volume' => 'increment'), false, false),
+            'V_VOL_AB'    => array('ton/leiser', 'Application.SetVolume', array('volume' => 'decrement'), false, false),
+            'V_QUIT'      => array('beenden', 'Application.Quit', null, false, true),
+            'V_MUTE_UM'   => array('ton/stumm_umschalten', 'Application.SetMute', array('mute' => 'toggle'), false, false),
+            'V_MUTE_AN'   => array('ton/stumm_an', 'Application.SetMute', array('mute' => true), false, false),
+            'V_MUTE_AUS'  => array('ton/stumm_aus', 'Application.SetMute', array('mute' => false), false, false),
+        );
+    }
+}
+
+/** Das Praefix der Linie (leer = Vorgabe kodi). */
+if (!function_exists('ko_praefix')) {
+    function ko_praefix($cfg = null)
+    {
+        if (!is_array($cfg)) { $cfg = ko_config(); }
+        return (isset($cfg['mqtt_topic']) && (string) $cfg['mqtt_topic'] !== '') ? (string) $cfg['mqtt_topic'] : 'kodi';
+    }
+}
+
+/** Der Name, den das MQTT-Gateway einem Thema gibt - EINE Stelle (Entwurf 2.4; bis 1.2.21 zweimal: ko_vorlage()
+ *  und index.php): <praefix>/<thema>, jeder Schraegstrich wird Unterstrich. */
+if (!function_exists('ko_vi_name')) {
+    function ko_vi_name($thema, $cfg = null)
+    {
+        return str_replace('/', '_', ko_praefix($cfg) . '/' . (string) $thema);
+    }
+}
+
+/** Gilt das Praefix auch fuer Befehle? Die Bruecke laesst je Ebene nur [A-Za-z0-9_-] zu (eigener Fund F4: "kodi.tv"
+ *  ist als Werte-Praefix erlaubt, fuer Befehle nicht). Mit geladener Bruecke deren Pruefung, sonst dieselbe Regel. */
+if (!function_exists('ko_praefix_befehle_gueltig')) {
+    function ko_praefix_befehle_gueltig($p)
+    {
+        if (function_exists('bb_praefix_gueltig')) { return bb_praefix_gueltig($p); }
+        return is_string($p) && strlen($p) <= 100
+            && (bool) preg_match('#^[A-Za-z0-9_\-]{1,40}(/[A-Za-z0-9_\-]{1,40}){0,4}\z#', $p);
+    }
+}
+
+/**
+ * V2-Hakenliste des Musterprojekts (Praefix kodi, 10 Haken; Entwurf 2.4, E9): Thema relativ zum Praefix, Art und
+ * Kennzeichen N (Noncached: kommt mit gleichem Wert wieder - status/ok jede Minute, erreichbar alle 5 Minuten, event
+ * kann sich wiederholen). Resetaftersend: keiner.
+ */
+if (!function_exists('ko_mqtt_hakenliste')) {
+    function ko_mqtt_hakenliste()
+    {
+        return array(
+            array('status/ok', 'zahl', 'N'), array('status/zaehler', 'zahl', ''), array('dienst', 'zahl', ''),
+            array('autostart', 'zahl', ''), array('erreichbar', 'zahl', 'N'),
+            array('event', 'text', 'N'), array('movie_title', 'text', ''), array('episode_title', 'text', ''),
+            array('music_title', 'text', ''), array('screensaver', 'text', ''),
+        );
+    }
+}
+
+/**
+ * Die Namenstabelle - EINE Quelle fuer den Reiter Einbindung (mit Kopierknopf), den Reiter MQTT und die Pruefzeile.
+ * Aus ko_themen() plus status/befehle der Bruecke. Je Zeile: thema (relativ), voll, name (Gateway), art (zahl|text),
+ * quelle (plugin|addon|bruecke), retained, v2 ('N' oder ''), muster (steht so im Musterprojekt), schl (THEMA.*).
+ */
+if (!function_exists('ko_mqtt_namen')) {
+    function ko_mqtt_namen($cfg = null)
+    {
+        if (!is_array($cfg)) { $cfg = ko_config(); }
+        $muster = array();
+        foreach (ko_mqtt_hakenliste() as $h) { $muster[$h[0]] = $h[2]; }
+        $zeilen = array();
+        foreach (ko_themen() as $t) {
+            $zeilen[] = array($t['name'], !empty($t['zahl']) ? 'zahl' : 'text', $t['quelle'], !empty($t['retain']),
+                              $t['schl'], $t['wschl']);
+        }
+        $zeilen[] = array('status/befehle', 'zahl', 'bruecke', false, 'T_BEFEHLE', 'V_BEFEHLE');
+        $aus = array();
+        foreach ($zeilen as $z) {
+            $aus[] = array('thema' => $z[0], 'voll' => ko_praefix($cfg) . '/' . $z[0], 'name' => ko_vi_name($z[0], $cfg),
+                           'art' => $z[1], 'quelle' => $z[2], 'retained' => $z[3],
+                           'v2' => isset($muster[$z[0]]) ? $muster[$z[0]] : '', 'muster' => isset($muster[$z[0]]),
+                           'schl' => $z[4], 'wschl' => $z[5]);
+        }
+        return $aus;
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Befehlsbruecke: Einstellungen, Protokoll, tun()
+ * ------------------------------------------------------------------ */
+
+/**
+ * Einstellungen fuer die Zuordnung. ko_config(TRUE) - eigener Fund F6: ko_config() haelt die Konfiguration statisch;
+ * im Dauerprozess der Bruecke saehe sie sonst nie ein neues Kennwort, Praefix oder einen Haken. mqtt_ein: immer
+ * (Kodi NG sendet ohnehin nur ueber das Gateway; status/befehle geht auch bei ausgeschaltetem Statussender).
+ */
+if (!function_exists('ko_bb_einstellungen')) {
+    function ko_bb_einstellungen()
+    {
+        $c = ko_config(true);
+        return array('praefix' => ko_praefix($c),
+                     'annehmen' => isset($c['befehle_mqtt_ein']) && (string) $c['befehle_mqtt_ein'] === '1',
+                     'eingreifend' => isset($c['befehle_mqtt_steuern']) && (string) $c['befehle_mqtt_steuern'] === '1',
+                     'mqtt_ein' => true);
+    }
+}
+
+/** Protokoll der Befehlsbruecke: die Protokolldatei des Plugins (ko_log), mit Stufe. */
+if (!function_exists('ko_bb_protokoll')) {
+    function ko_bb_protokoll($stufe, $text)
+    {
+        ko_log('[' . (string) $stufe . '] ' . (string) $text);
+    }
+}
+
+/**
+ * Der Grund fuer die Quittung aus dem Fehlertext von ko_rpc() - OHNE Adresse und ohne Antworttext (die Quittung
+ * steht im Broker; Probe K des Entwurfs: der Rohtext trug Wirt:Port hinein). Den Volltext schreibt ko_bb_tun()
+ * gebremst ins Protokoll.
+ */
+if (!function_exists('ko_bb_grund')) {
+    function ko_bb_grund($text)
+    {
+        $t = (string) $text;
+        if (strpos($t, 'Adresse unzulaessig') === 0 || strpos($t, 'Port unzulaessig') === 0) { return 'ADRESSE'; }
+        if (strpos($t, 'keine Antwort') === 0) { return 'KODI_ANTWORTET_NICHT'; }
+        if (preg_match('/^HTTP 401\b/', $t)) { return 'KODI_ANMELDUNG'; }
+        if (preg_match('/^HTTP (\d{3})\b/', $t, $m)) { return 'KODI_HTTP_' . $m[1]; }
+        return 'KODI_FEHLER';
+    }
+}
+
+/**
+ * tun() der Befehlsbruecke fuer einen Schluessel aus ko_mqtt_befehle() (Entwurf 3.4). Reihenfolge: Upgrade-Marke
+ * (ohne Altersgrenze, wie preupgrade/postinstall entscheiden) -> AKTUALISIERUNG; Konfiguration frisch (F6); bei
+ * Spieler-Befehlen Player.GetActivePlayers -> keiner -> KEIN_SPIELER; dann der Befehl. Frist je Aufruf 3 s.
+ * Unabhaengig vom Abfrage-Haken rpc_ein (der schaltet nur die Abfrage des Statussenders). Rueckgabe array(bool, grund).
+ */
+if (!function_exists('ko_bb_tun')) {
+    function ko_bb_tun($schl)
+    {
+        static $zuletzt = array();
+        $t = ko_mqtt_befehle();
+        if (!isset($t[$schl])) { return array(false, 'UNBEKANNT'); }
+        list(, $methode, $params, $spieler) = $t[$schl];
+        $p = ko_paths();
+        if ($p['home'] !== '' && is_file($p['home'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft')) {
+            return array(false, 'AKTUALISIERUNG');
+        }
+        ko_config(true);
+        $fehl = function ($text) use (&$zuletzt, $schl) {
+            $g = ko_bb_grund($text);
+            $jetzt = time();
+            if (!isset($zuletzt[$g]) || $jetzt - $zuletzt[$g] >= 60 || $zuletzt[$g] > $jetzt) {
+                $zuletzt[$g] = $jetzt;
+                ko_log('[WARN] Befehl ' . $schl . ' ueber MQTT: ' . $g . ' - ' . substr((string) $text, 0, 300));
+            }
+            return array(false, $g);
+        };
+        if ($spieler) {
+            list($ok, $r) = ko_rpc('Player.GetActivePlayers', null, 3);
+            if (!$ok) { return $fehl($r); }
+            if (!is_array($r) || !$r || !isset($r[0]['playerid']) || !is_numeric($r[0]['playerid'])) {
+                return array(false, 'KEIN_SPIELER');
+            }
+            $params = array('playerid' => (int) $r[0]['playerid']) + (array) $params;
+        }
+        list($ok, $r) = ko_rpc($methode, $params, 3);
+        if (!$ok) { return $fehl($r); }
+        return array(true, '');
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Die Bruecke aus der Oberflaeche: laden, Liste, schalten
+ * ------------------------------------------------------------------ */
+
+/** Eine Datei unter bin/ (installiert bin/plugins/<ordner>, im Archiv <paket>/bin); '' = fehlt. Zweiter Kandidat ist
+ *  der Ordner DIESER Bibliothek - sie liegt immer neben der Bruecke (auch wenn LBHOMEDIR/LBPPLUGINDIR auf eine andere
+ *  Anlage zeigen, wie in den Pruefwerkzeugen). */
+if (!function_exists('ko_bin_datei')) {
+    function ko_bin_datei($name)
+    {
+        foreach (array(ko_paths()['bin'] . '/' . $name, __DIR__ . '/' . $name) as $f) {
+            if (is_file($f)) { return $f; }
+        }
+        return '';
+    }
+}
+
+/** Die Bruecke als Bibliothek laden (BB_NUR_LADEN: kein Hauptteil). */
+if (!function_exists('ko_bruecke_laden')) {
+    function ko_bruecke_laden()
+    {
+        if (function_exists('bb_waechter')) { return true; }
+        $f = ko_bin_datei('befehlsbruecke.php');
+        if ($f === '') { return false; }
+        if (!defined('BB_NUR_LADEN')) { define('BB_NUR_LADEN', true); }
+        require_once $f;
+        return function_exists('bb_waechter');
+    }
+}
+
+/** Die geladene und gepruefte Zuordnung: array(zuordnung|null, fehlertext). */
+if (!function_exists('ko_bb_zuordnung')) {
+    function ko_bb_zuordnung()
+    {
+        if (!ko_bruecke_laden()) { return array(null, 'befehlsbruecke.php fehlt'); }
+        list($z, $f) = bb_zuordnung_laden(ko_bin_datei('befehle_zuordnung.php') !== ''
+            ? ko_bin_datei('befehle_zuordnung.php') : ko_paths()['bin'] . '/befehle_zuordnung.php');
+        if ($z === null) { return array(null, $f); }
+        list($fehl) = bb_zuordnung_pruefen($z);
+        if ($fehl) { return array(null, 'Zuordnung defekt: ' . $fehl[0]); }
+        return array($z, '');
+    }
+}
+
+/**
+ * Direktstart bzw. -stopp der Bruecke nach dem Speichern im Reiter MQTT (Bauart Matter2Lox 0.9.44
+ * mt_bruecke_schalten()): befehlsbruecke.sh start startet nur nach --soll, nie als root, nie waehrend eines Updates,
+ * nie doppelt; der Waechter in cron.01min startet hoechstens alle 600 s neu. $neustart: Praefix gewechselt.
+ * Rueckgabe array(''|'ein'|'aus'|'start_fehl'|'stop_fehl', Ausgabe).
+ */
+if (!function_exists('ko_bruecke_schalten')) {
+    function ko_bruecke_schalten($neustart = false)
+    {
+        if (DIRECTORY_SEPARATOR === '\\' || ko_paths()['home'] === '' || !ko_bruecke_laden()) { return array('', ''); }
+        $p = bb_pfade();
+        if (!$p) { return array('', ''); }
+        $e = ko_bb_einstellungen();
+        $laeuft = (bool) bb_dienste();
+        if ($e['annehmen']) {
+            if ($laeuft && !$neustart) { return array('', ''); }
+            if ($laeuft) { bb_sh($p, 'stop'); }
+            list($rc, $aus) = bb_sh($p, 'start');
+            return array(($rc === 0 && bb_dienste()) ? 'ein' : 'start_fehl', $aus);
+        }
+        if (!$laeuft) { return array('', ''); }
+        list($rc, $aus) = bb_sh($p, 'stop');
+        return array(($rc === 0 && !bb_dienste()) ? 'aus' : 'stop_fehl', $aus);
+    }
+}
+
+/** Ein Satz zum Ergebnis von ko_bruecke_schalten() ('' = nichts zu sagen), maskiert. */
+if (!function_exists('ko_bruecke_satz')) {
+    function ko_bruecke_satz(array $r)
+    {
+        $a = $r[1] !== '' ? $r[1] : '-';
+        switch ($r[0]) {
+            case 'ein': return ko_e(sprintf(ko_t('BEFEHL.M_GESTARTET'), $a));
+            case 'aus': return ko_e(sprintf(ko_t('BEFEHL.M_ANGEHALTEN'), $a));
+            case 'start_fehl': return ko_e(sprintf(ko_t('BEFEHL.M_START_FEHL'), $a));
+            case 'stop_fehl': return ko_e(sprintf(ko_t('BEFEHL.M_STOP_FEHL'), $a));
+        }
+        return '';
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Befehlstabelle und Vorlage MQTT-Befehle (Entwurf 3.7)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Die 26 MQTT-Befehle in der Reihenfolge von ko_vo_befehle(): schl, titel (Anzeigename [VOBEF], "Kodi: ..."),
+ * name (Brueckenname), thema (<praefix>/befehl/<name>), eingreifend. EINE Quelle fuer die Tabelle im Reiter
+ * Einbindung, die Vorlage und die Bausteinliste.
+ */
+if (!function_exists('ko_mqtt_befehl_zeilen')) {
+    function ko_mqtt_befehl_zeilen($cfg = null)
+    {
+        $m = ko_mqtt_befehle();
+        $aus = array();
+        foreach (ko_vo_befehle() as $c) {
+            if (!isset($m[$c[1]])) { continue; }
+            $aus[] = array('schl' => $c[1], 'titel' => (string) ko_t('VOBEF.' . $c[1]), 'name' => $m[$c[1]][0],
+                           'thema' => ko_praefix($cfg) . '/befehl/' . $m[$c[1]][0], 'eingreifend' => (bool) $m[$c[1]][4]);
+        }
+        return $aus;
+    }
+}
+
+/** Der Wirt, unter dem der Miniserver den LoxBerry erreicht (UDP-Eingang des Gateways): wie ko_steuer_wirt() der Wirt
+ *  der laufenden Anfrage, sonst "loxberry" - aber nie kodi_host (der kann ein anderes Geraet sein). */
+if (!function_exists('ko_udp_wirt')) {
+    function ko_udp_wirt()
+    {
+        $w = ko_sicht_wirt();
+        return $w !== '' ? $w : 'loxberry';
+    }
+}
+
+/**
+ * Vorlage "MQTT-Befehle" (Entwurf 3.7): VirtualOut "Kodi Befehle (MQTT)" an /dev/udp/<LoxBerry>/<UDP-Eingang des
+ * Gateways>, CloseAfterSend, je Befehl ein VirtualOutCmd: Titel = Anzeigename "Kodi: ..." (wie das Musterprojekt;
+ * bb_vorlage() der Stammfassung nennt "Kodi ... (MQTT)"), CmdOn "publish <praefix>/befehl/<name> 1", nie retain.
+ * Kein Titel gleicht einem Gateway-Namen (Doppelpunkt und Leerzeichen). Rueckgabe array(Dateiname, Inhalt).
+ */
+if (!function_exists('ko_vorlage_mqtt_out')) {
+    function ko_vorlage_mqtt_out($host = null)
+    {
+        if ($host === null) { $host = ko_udp_wirt(); }
+        $port = ko_mqtt_port();
+        $x = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8'); };
+        $crlf = "\r\n";
+        $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+        $o .= '<VirtualOut HintText="" Title="Kodi Befehle (MQTT)" Comment="'
+            . $x('Erzeugt vom LoxBerry-Plugin Kodi NG (' . date('d.m.Y') . '). UDP-Eingang des MQTT-Gateways auf dem '
+                . 'LoxBerry; wirkt nur mit dem Haken "Befehle ueber MQTT annehmen", "Kodi: beenden" zusaetzlich mit '
+                . '"Eingreifende Befehle ueber MQTT zulassen". Loxone Config legt beim Import neu an und ueberschreibt '
+                . 'nichts.')
+            . '" Address="' . $x('/dev/udp/' . $host . '/' . ($port > 0 ? $port : 11884))
+            . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+        $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+        foreach (ko_mqtt_befehl_zeilen() as $b) {
+            $o .= "\t" . '<VirtualOutCmd Title="' . $x($b['titel']) . '" Comment="'
+                . $x('Taster' . ($b['eingreifend'] ? ', eingreifend' : '') . ', nie retain') . '" CmdOnMethod="GET" '
+                . 'CmdOffMethod="GET" CmdOn="' . $x('publish ' . $b['thema'] . ' 1') . '" CmdOnHTTP="" CmdOnPost="" '
+                . 'CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" Analog="false" Repeat="0" RepeatRate="0" '
+                . 'HintText=""/>' . $crlf;
+        }
+        $o .= '</VirtualOut>' . $crlf;
+        return array('VQ_kodi_ng_mqtt.xml', $o);
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Pruefzeilen der Umstellung (Reiter Test). Alle lesen nur.
+ * Rueckgabe je array(stand, text): 1 in Ordnung, 0 Fehler, -1 Hinweis (grau).
+ * ------------------------------------------------------------------ */
+
+/** Laeuft die Befehlsbruecke? Haken aus ist ein Hinweis, kein Kreuz. Nennt status/befehle und die letzte Quittung. */
+if (!function_exists('ko_pruef_bruecke')) {
+    function ko_pruef_bruecke($cfg)
+    {
+        list($z, $fehler) = ko_bb_zuordnung();
+        if ($z === null) {
+            return array(0, sprintf(ko_t('TEST.A_BRUECKE_DEFEKT'), ko_e($fehler)));
+        }
+        if ((string) $cfg['befehle_mqtt_ein'] !== '1') {
+            return array(-1, ko_t('TEST.A_BRUECKE_AUS'));
+        }
+        $pr = ko_praefix($cfg);
+        if (!ko_praefix_befehle_gueltig($pr)) {
+            return array(0, sprintf(ko_t('TEST.A_BRUECKE_PRAEFIX'), ko_e($pr)));
+        }
+        if (DIRECTORY_SEPARATOR === '\\' || ko_paths()['home'] === '' || !bb_pfade()) {
+            return array(-1, ko_t('TEST.A_BRUECKE_ARCHIV'));
+        }
+        $zu = bb_zustand_lesen();
+        $alter = ($zu && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+        if (!bb_dienste()) { return array(0, ko_t('TEST.A_BRUECKE_STEHT')); }
+        if ($alter === null || $alter > BB_WACHE_GRENZE) {
+            return array(0, sprintf(ko_t('TEST.A_BRUECKE_HAENGT'), (int) $alter));
+        }
+        if (empty($zu['abo'])) {
+            return array(0, sprintf(ko_t('TEST.A_BRUECKE_OHNE_ABO'), ko_e(isset($zu['fehler']) ? (string) $zu['fehler'] : '')));
+        }
+        $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+        $letzte = (!empty($zu['letzter']) && is_array($zu['letzter']))
+            ? (string) $zu['letzter']['name'] . ': ' . (string) $zu['letzter']['ergebnis'] . ' (vor '
+              . max(0, time() - (int) $zu['letzter']['zeit']) . ' s)' : '-';
+        return array(1, sprintf(ko_t('TEST.A_BRUECKE_LAEUFT'),
+            ko_e(date('d.m.Y H:i', isset($zu['start']) ? (int) $zu['start'] : time())),
+            isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0,
+            isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0, ko_e($letzte),
+            '<span class="sm-mono">' . ko_e($pr . '/status/befehle') . '</span>'));
+    }
+}
+
+/** "befehlsbruecke.php --pruefen" (mosquitto-clients, Zuordnung) als EINE Zeile. */
+if (!function_exists('ko_pruef_bruecke_einrichtung')) {
+    function ko_pruef_bruecke_einrichtung($cfg)
+    {
+        if (!ko_bruecke_laden()) { return array(0, sprintf(ko_t('TEST.A_BRUECKE_DEFEKT'), 'befehlsbruecke.php')); }
+        ob_start();
+        bb_pruefen();
+        $aus = array_values(array_filter(explode("\n", (string) ob_get_clean()), 'strlen'));
+        if (!$aus) { return array(-1, ko_t('TEST.A_BRUECKE_UNKLAR')); }
+        $fehl = array_values(preg_grep('/^\[FEHL\]/', $aus));
+        if ($fehl) {
+            // Fehlende mosquitto-clients bei ausgeschaltetem Haken: ein Hinweis, kein Kreuz.
+            return array((string) $cfg['befehle_mqtt_ein'] === '1' ? 0 : -1,
+                ko_e(implode(' | ', $fehl)) . ' ' . ko_t('TEST.R_BRUECKE_EINRICHTUNG'));
+        }
+        return array(1, ko_e(implode(' | ', array($aus[0], end($aus)))));
+    }
+}
+
+/**
+ * Befehlstabellen (Entwurf 3.3): ko_mqtt_befehle() deckt die 26 Schluessel von ko_vo_befehle() in DERSELBEN
+ * Reihenfolge, jeder Brueckenname einmal, genau "beenden" eingreifend; und jeder Titel der Zuordnung ist
+ * "Kodi <Anzeigename ohne 'Kodi: '> (MQTT)" aus der DEUTSCHEN Sprachdatei. $zuordnung: fuer die Gegenprobe.
+ */
+if (!function_exists('ko_pruef_befehlstabellen')) {
+    function ko_pruef_befehlstabellen($zuordnung = null)
+    {
+        $vo = array();
+        foreach (ko_vo_befehle() as $c) { $vo[] = $c[1]; }
+        $m = ko_mqtt_befehle();
+        if (array_keys($m) !== $vo) { return array(0, ko_t('TEST.A_BEFTAB_REIHE')); }
+        $namen = array();
+        $ein = array();
+        foreach ($m as $k => $e) {
+            $namen[] = $e[0];
+            if ($e[4]) { $ein[] = $e[0]; }
+        }
+        if (count(array_unique($namen)) !== count($namen) || $ein !== array('beenden')) {
+            return array(0, ko_t('TEST.A_BEFTAB_NAMEN'));
+        }
+        if ($zuordnung === null) {
+            list($zuordnung, $f) = ko_bb_zuordnung();
+            if ($zuordnung === null) { return array(0, sprintf(ko_t('TEST.A_BRUECKE_DEFEKT'), ko_e($f))); }
+        }
+        $verz = ko_langdir();
+        $de = ($verz !== '' && is_file($verz . '/language_de.ini'))
+            ? @parse_ini_file($verz . '/language_de.ini', true, INI_SCANNER_RAW) : false;
+        if (!is_array($de) || !isset($de['VOBEF'])) { return array(-1, ko_t('TEST.A_BEFTAB_KEIN_DE')); }
+        $falsch = array();
+        foreach ($m as $k => $e) {
+            $soll = isset($de['VOBEF'][$k]) ? 'Kodi ' . preg_replace('/^Kodi: /', '', $de['VOBEF'][$k]) . ' (MQTT)' : '?';
+            $ist = isset($zuordnung['befehle'][$e[0]]['titel']) ? $zuordnung['befehle'][$e[0]]['titel'] : '';
+            if ($ist !== $soll) { $falsch[] = $e[0]; }
+        }
+        if (count($zuordnung['befehle']) !== count($m)) { $falsch[] = '(' . count($zuordnung['befehle']) . ')'; }
+        if ($falsch) { return array(0, sprintf(ko_t('TEST.A_BEFTAB_TITEL'), ko_e(implode(', ', $falsch)))); }
+        return array(1, sprintf(ko_t('TEST.A_BEFTAB_OK'), count($m)));
+    }
+}
+
+/**
+ * Erreicht die Bruecke Kodi? (eigener Fund F5) JSONRPC.Ping ueber denselben Weg wie die Befehle (ko_rpc, HTTP auf
+ * kodi_port, Frist 3 s), mit "wer hat geantwortet". Nur mit "Befehle ueber MQTT annehmen"; 300 s zwischengespeichert
+ * wie die Zeile "Antwortet Kodi?".
+ */
+if (!function_exists('ko_pruef_bruecke_kodi')) {
+    function ko_pruef_bruecke_kodi($cfg, $erzeuger = null)
+    {
+        if ((string) $cfg['befehle_mqtt_ein'] !== '1') { return array(-1, ko_t('TEST.A_BRUECKE_KODI_AUS')); }
+        if (ko_paths()['home'] === '') { return array(-1, ko_t('TEST.A_BRUECKE_ARCHIV')); }
+        $r = $erzeuger !== null ? call_user_func($erzeuger) : ko_rpc('JSONRPC.Ping', null, 3);
+        if (!empty($r[0])) {
+            return array(1, sprintf(ko_t('TEST.A_BRUECKE_KODI_OK'), ko_e((string) $cfg['kodi_port'])));
+        }
+        return array(0, sprintf(ko_t('TEST.A_BRUECKE_KODI_FEHL'), ko_e(ko_bb_grund($r[1])), ko_e((string) $r[1])));
+    }
+}
+
+/**
+ * Namenstabelle (Entwurf 2.4): jeder Name ist der Gateway-Name seines Themas (Gegenseite: strtr ohne ko_vi_name()),
+ * und jedes Thema ist eines aus ko_themen() oder status/befehle. $namen: Liste array(voll, name) fuer die Gegenprobe.
+ */
+if (!function_exists('ko_pruef_namen')) {
+    function ko_pruef_namen($namen = null)
+    {
+        $cfg = ko_config();
+        if ($namen === null) {
+            $namen = array();
+            foreach (ko_mqtt_namen($cfg) as $z) { $namen[] = array($z['voll'], $z['name']); }
+        }
+        $themen = array('status/befehle');
+        foreach (ko_themen() as $t) { $themen[] = $t['name']; }
+        $vor = ko_praefix($cfg) . '/';
+        $falsch = array();
+        foreach ($namen as $z) {
+            $thema = strpos($z[0], $vor) === 0 ? substr($z[0], strlen($vor)) : '';
+            if (!in_array($thema, $themen, true) || $z[1] !== strtr($z[0], array('/' => '_'))) { $falsch[] = $z[1]; }
+        }
+        $muster = 0;
+        foreach (ko_mqtt_hakenliste() as $h) { if (in_array($h[0], $themen, true)) { $muster++; } }
+        if ($muster !== count(ko_mqtt_hakenliste())) { $falsch[] = 'Hakenliste'; }
+        return $falsch ? array(0, sprintf(ko_t('TEST.A_NAMEN_FEHL'), ko_e(implode(', ', $falsch))))
+                       : array(1, sprintf(ko_t('TEST.A_NAMEN_OK'), count($namen), count(ko_mqtt_hakenliste())));
+    }
+}
+
+/** Kodis Fernsteuerung aus dem Heimnetz (esallinterfaces, Entwurf 3.6): Haken gegen advancedsettings.xml. */
+if (!function_exists('ko_pruef_fernsteuerung')) {
+    function ko_pruef_fernsteuerung($cfg, $adv = false)
+    {
+        $soll = (string) $cfg['fernsteuerung_netz_ein'] === '1';
+        if ($adv === false) { $adv = ko_adv_lesen(); }
+        if ($adv === null || !isset($adv['netz']) || $adv['netz'] === '') {
+            return array(-1, sprintf(ko_t('TEST.A_NETZ_UNKLAR'), $soll ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS')));
+        }
+        $ist = $adv['netz'] === 'true';
+        if ($ist === $soll) {
+            return array(1, $ist ? ko_t('TEST.A_NETZ_OFFEN') : ko_t('TEST.A_NETZ_ZU'));
+        }
+        return array(0, sprintf(ko_t('TEST.A_NETZ_ABWEICHUNG'), $ist ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'),
+            $soll ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS')));
+    }
+}
+
+/** Fassung des mitgelieferten Kodi-Addons (K12: 3.2.2) aus addon.xml neben default.py. */
+if (!function_exists('ko_addon_fassung')) {
+    function ko_addon_fassung($default_py)
+    {
+        $x = ko_lesen(dirname((string) $default_py) . '/addon.xml');
+        if ($x !== '' && preg_match('/<addon\s[^>]*\bversion="([0-9.]+)"/', $x, $m)) { return $m[1]; }
+        return '';
     }
 }

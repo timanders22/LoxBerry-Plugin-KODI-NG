@@ -14,19 +14,9 @@ Stand 0.1.2 vom April 2018, Apache License 2.0
 
 Weitere enthaltene Werke
 ------------------------
-bin/kodi-rpc
-    kodi-rpc, "Simple shell wrapper for kodis jsonrpc", von tadly
-    https://github.com/tadly/kodi-rpc
-    Mitgeliefert ist die Fassung 0.0.2 (Kopfzeile VERSION); verglichen am
-    17.09.2026 mit dem Zweig master (0.0.4): bis auf die Fassungszeile und
-    eine Pruefzeile fuer Zahlenwerte gleich. Steht unter der GNU General
-    Public License Version 3. Der vollstaendige Lizenztext liegt als
-    bin/kodi-rpc.LICENSE.txt daneben und muss mitgeliefert werden. Das
-    Plugin ruft das Werkzeug nicht auf.
-
 data/addons/service.callback.handler/
     Kodi-Addon "LoxBerry Kodi Callback Handler", provider-name christiantf,
-    seit 1.2.12 Addon-Fassung 3.2.1 (geaendert, siehe changelog.txt im Addon).
+    seit 1.2.22 Addon-Fassung 3.2.2 (geaendert, siehe changelog.txt im Addon).
     Der Kopf von default.py nennt "Copyright (C) 2015 Tefi" und die GNU
     General Public License Version 3 oder spaeter; Tefis Kopf stammt nach
     seinem Wortlaut aus service.xbmc.callbacks (Team-XBMC,

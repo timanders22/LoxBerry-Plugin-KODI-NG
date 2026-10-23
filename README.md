@@ -1,12 +1,42 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.21 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.22 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.22
+
+**Befehle über MQTT.** Die 26 Steuerbefehle gehen jetzt auch über das MQTT-Gateway: Loxone sendet
+`publish kodi/befehl/<name> 1` (etwa `taste/ab`, `wiedergabe/pause`, `ton/lauter`, `beenden`), die gemeinsame
+Befehlsbrücke des Plugins gibt jeden per JSON-RPC über HTTP an Kodi weiter und quittiert ihn unter
+`kodi/befehl/<name>/quittung`. Pause, Stopp, Spulen und Titelwechsel wirken auf den laufenden Spieler – auch bei
+Musik. Zwei neue Haken im Reiter MQTT, beide ab Werk aus: „Befehle über MQTT annehmen“ und „Eingreifende Befehle
+über MQTT zulassen“ (nur „Kodi: beenden“). Neu als Abhängigkeit: `mosquitto-clients`.
+
+**Einbindung in Loxone nach dem Musterprojekt.** Werte als Virtuelle Eingänge mit dem Namen des MQTT-Gateways
+(Namenstabelle mit Kopierknopf, Hakenliste für Gateway V2), Befehle über die neue Vorlage „MQTT-Befehle“. Die
+Eingangsvorlage mit HTTP-Eingängen ist entfallen. Der direkte Weg `tcp://…:9090` bleibt für bestehende Anlagen;
+der neue Haken „Kodis Fernsteuerung aus dem Heimnetz zulassen“ (ab Werk an) schließt ihn auf Wunsch – wirksam nach
+einem Neustart von Kodi.
+
+**Lebenszeichen nach Hausform.** Neu `status/zaehler` (0–999, läuft um) und `status/ts`; `herzschlag` und
+`zeitstempel` gehen weiter hinaus. Der Statussender ist bei einer Neuinstallation ab dem ersten Speichern an; ein
+Update ändert den gespeicherten Wert nicht.
+
+**Update von älteren Fassungen berichtigt.** Ein Update von 1.2.12 oder älter meldete `<FAIL>` und ließ die
+Sicherung mit dem Kodi-Kennwort liegen; jetzt wird je Datei verglichen. Ein abgebrochenes Update verliert beim
+zweiten Anlauf die Sicherung nicht mehr (die Marke fällt erst nach dem geprüften Zurückstellen).
+
+**Weitere Korrekturen.** Das Kodi-Addon meldet an `127.0.0.1` (bestehende Anlagen sehen im Reiter MQTT einmal
+„abweichend“, bis „Addon-Einstellungen setzen“ gedrückt ist); Addon-Fassung 3.2.2 (nur Beschreibung). Die
+Deinstallation leert auch ein abweichendes Addon-Präfix und fasst bei fremdem Pluginnamen nichts an. Reiter Test und
+MQTT laden frisch; die Addon-Tabelle fragt den Helfer nur noch im Reiter MQTT. Hilfelink auf die Wiki-Seite. Das
+unbenutzte Werkzeug `bin/kodi-rpc` ist entfernt. Kleinere Härtungen in den Hakenskripten und im Helfer
+(Rechte und fsync beim Schreiben der config.txt, eingerückte Zeilen).
 
 ## Neu in 1.2.21
 
@@ -1211,9 +1241,6 @@ sowie `erreichbar` (seit 1.2.10 nie retained).
   anderen Rechnern (`esallinterfaces`). Sie öffnet zugleich den EventServer
   (UDP 9777) ohne Anmeldung im Heimnetz.
 - Nach der Installation ist ein Neustart erforderlich (Gruppenrechte).
-- `bin/kodi-rpc` ist ein Werkzeug für die **Befehlszeile**; das Plugin ruft es
-  nicht auf. Verbindungsangaben über `-H`, `-P`, `-u`, `-p` oder eine eigene
-  `~/.config/kodi-rpc.conf`.
 
 Die Bausteine der drei Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
 den Seiten „Kodi-NG“, „Kodi-NG Fernbedienung“ und „Kodi-NG Wiedergabe“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
@@ -1357,9 +1384,8 @@ setzen; Kodis eigene Bibliothek bleibt unberührt, weil `/home/kodi` bleibt.
 
 Grundlage ist [LoxBerry-Plugin-Kodi von **Christian Fenzl (christianTF)**](https://github.com/christianTF/LoxBerry-Plugin-Kodi),
 Stand 0.1.2 von 2018, Apache-Lizenz 2.0. Die Liste der Änderungen steht in
-`NOTICE` (Apache-Lizenz 2.0, Abschnitt 4 b). Das mitgelieferte `bin/kodi-rpc`
-steht unter der GPL v3; sein Lizenztext liegt als `bin/kodi-rpc.LICENSE.txt`
-daneben.
+`NOTICE` (Apache-Lizenz 2.0, Abschnitt 4 b). Das früher mitgelieferte Werkzeug
+kodi-rpc (GPL v3) ist seit 1.2.22 entfallen; wer es braucht, holt es bei tadly/kodi-rpc.
 
 ### Aufgeräumt (Altbestand im Paket)
 
