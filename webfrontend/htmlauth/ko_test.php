@@ -731,6 +731,10 @@ function ko_pruefungen(array $reiter, $indexdatei)
     }
     list($s, $t) = ko_pruef_namen();
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_NAMEN'), $t);
+    // Nachtwelle N7 (1.2.23): stehen unter MQTT-Gateway V2 die Haken der Hakenliste mit dem richtigen Noncached?
+    // Liest config/system/subscriptions.json; unter V1 ein Strich. Die Antwort ist hier HTML - deshalb ko_e().
+    list($s, $t) = ko_v2_haken_lage($cfg);
+    $z[] = ko_pruefzeile($s === 2 ? -1 : $s, ko_t('TEST.F_V2_HAKEN'), ko_e($t));
     list($s, $t) = ko_pruef_fernsteuerung($cfg, $adv);
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_NETZ'), $t);
     $ko_af = ko_addon_fassung(ko_addon_quelle());

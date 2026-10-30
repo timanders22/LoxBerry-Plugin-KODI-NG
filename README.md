@@ -1,12 +1,25 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.22 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.23 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.23
+
+Pflegefassung der Nachtwelle (29.10.2026), ohne neue Funktion:
+
+* **Befehlsbrücke 1.0.2** (gemeinsame Stammfassung, bisher 1.0.0): `stop` legt als root nichts mehr an, die
+  Startausgabe wird gekappt, eine leere oder ungültige Uhr startet die Brücke bei liegender Aktualisierungsmarke
+  nicht, der Befehlsordner ist nur für das Plugin lesbar (0700). Themen, Quittungen und Haken bleiben, wie sie
+  waren. Die Vorlage der MQTT-Befehle baut dieses Plugin selbst; sie hatte schon Windows-Zeilenenden (CRLF).
+* **Reiter Test, neue Zeile „Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?“** Unter MQTT-Gateway V2
+  liest das Plugin `config/system/subscriptions.json` und nennt jeden Datenpunkt der Hakenliste (Reiter
+  Einbindung in Loxone), der dort nicht angehakt ist, und jeden, bei dem „Noncached“ nicht stimmt (`status/ok`, `erreichbar` und `event` brauchen es, die übrigen nicht).
+  Unter Gateway V1 heißt die Zeile „trifft nicht zu“.
 
 ## Neu in 1.2.22
 
