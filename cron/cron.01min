@@ -98,7 +98,10 @@ fi
 # schreibt seine Stoerungen gebremst mit Zeitstempel in dieselbe Datei; hier
 # kommt nur an, was PHP selbst sagt, bevor das Skript das kann (etwa ein
 # Syntaxfehler). Die normale Ausgabe ist leer.
-if [ -d "$(dirname "$LOGDATEI")" ]; then
+# 1.2.24 (Nachzug 01.11.2026, Bauart Renault NG 2.1.23): ist die Fehlerdatei nicht schreibbar, braeche die
+# Umlenkung den Befehl ab, BEVOR er startet - bis 1.2.23 kein Lauf und keine Spur. Dann geht die Fehlerausgabe
+# nach /dev/null, und der Lauf findet statt.
+if ( : >>"$LOGDATEI" ) 2>/dev/null; then
     exec "$PHP" "$SKRIPT" 2>>"$LOGDATEI"
 fi
 exec "$PHP" "$SKRIPT"

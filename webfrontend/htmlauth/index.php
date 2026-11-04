@@ -143,6 +143,17 @@ function ko_falsch($formular, $k)
     return '';
 }
 
+/**
+ * Ein Argument fuer die Schale anfuehren, Byte fuer Byte: fuer Themen, Werte und Texte, nicht fuer Pfade.
+ * Bis 1.2.23 stand hier escapeshellarg(). Es verwirft unter PHP 7.4 jedes Byte, das im LC_CTYPE kein gueltiges Zeichen ist; Apache startet mit LANG=C, eine
+ * Befehlsbruecke ohne LANG: aus "Kueche" mit Umlaut wurde "Kche", ohne Fehler (am Geraet gemessen 01.11.2026). setlocale() fehlt, wo keine UTF-8-Locale
+ * erzeugt ist, und aendert basename() und PCRE. Einfache Anfuehrungszeichen sind fuer sh und dash byte-erhaltend; ein Nullbyte kann kein Argument tragen.
+ */
+function ko_shell_arg($s)
+{
+    return "'" . str_replace("'", "'\\''", str_replace("\0", '', (string) $s)) . "'";
+}
+
 /** Einen Schluessel ueber den Helfer setzen - und die ANTWORT lesen.
  *
  *  Bis 1.2.6 wurde sie an allen vier action=change-Stellen verworfen. Der
@@ -156,7 +167,7 @@ function ko_falsch($formular, $k)
 function ko_helfer_setzen($schluessel, $wert)
 {
     $j = ko_helper_json('action=change key=' . escapeshellarg((string) $schluessel)
-        . ' value=' . escapeshellarg((string) $wert));
+        . ' value=' . ko_shell_arg((string) $wert));
     if (!is_array($j)) { return ko_t('MELDUNG.HELFER_STUMM'); }
     if (isset($j['status']) && $j['status'] === 'OK') { return ''; }
     return isset($j['reason']) ? (string) $j['reason']
@@ -255,6 +266,19 @@ if (ko_ist_post() && isset($_POST['vorlage']) && is_string($_POST['vorlage'])
     exit;
 }
 
+/* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+if (ko_ist_post() && isset($_POST['ansage_test'])) {
+    list($ko_at, $ko_ag) = ko_ansage_test();
+    if ($ko_at) { $ko_saved = true; } else { $ko_err = ko_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $ko_ag; }
+    $ko_tab = 'tab-settings';
+}
+if (ko_ist_post() && isset($_POST['ansage_speichern'])) {
+    list($ko_ao, $ko_af, $ko_ah) = ko_ansage_post($_POST);
+    if ($ko_af) { $ko_err = implode(' ', $ko_af); }
+    elseif ($ko_ao) { $ko_saved = true; }
+    else { $ko_err = ko_t('ANSAGEPLUGIN.M_FEHL'); }
+    $ko_tab = 'tab-settings';
+}
 if (ko_ist_post() && isset($_POST['sichern'])) {
     // X-3: Kopfzeile _warnung mit den Namen, falls noetig (ko_warnkopf_setzen).
     $ko_txt = ko_warnkopf_setzen(ko_sicherung_text());
@@ -1325,6 +1349,7 @@ if ($ko_gw !== null && !$ko_gw['autostart']) { ?>
 </div>
 </form>
 
+<?= ko_ansage_form_html(ko_fmt() . '<input data-role="none" type="hidden" name="activetab" value="tab-settings">') ?>
 <h2><?= ko_e(ko_t('SICH.H_SICHERUNG')) ?></h2>
 <div class="sm-warnung"><?= ko_t('SICH.GEHEIM') ?></div>
 <div class="sm-hilfe"><?= ko_t('SICH.HINWEIS') ?></div>

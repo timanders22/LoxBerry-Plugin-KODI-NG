@@ -206,6 +206,9 @@ if ($ko_faellig && (string) $ko_cfg['rpc_ein'] === '1') {
     $ko_titel_ok   = !empty($z['titel_ok']);
 }
 
+/* Die Ansage: Kodi steht auf Autostart und antwortet nicht. Nach 10 Minuten Dauer, der erste Lauf schweigt, nie die Wiedergabe. Legt nur hin. */
+if ($ko_erreichbar !== null && $ko_autostart === 1) { ko_ansage_flanke('ausfall', $ko_erreichbar !== 1, '', 600); }
+
 /* ---------- senden ---------- */
 
 $ko_zaehler = isset($ko_zustand['herzschlag']) ? (int) $ko_zustand['herzschlag'] : 0;
