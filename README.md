@@ -1,12 +1,20 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.24 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.25 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.25
+
+- **Fremder Dienst auf dem Kodi-Port:** Nur eine Antwort `pong` auf den Ping zählt als Kodi. Bisher galt jede JSON-Antwort als „erreichbar“ und „stop“ und überschrieb den letzten Stand; jetzt steht `erreichbar` auf 0, und die Wiedergabe bleibt „-“ (nicht feststellbar).
+- **Fehlertext statt Absturz:** Ein Feld `error` als Text bringt den Sender unter PHP 8 nicht mehr zum Absturz.
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Formular:** Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen.
 
 ## Neu in 1.2.24
 

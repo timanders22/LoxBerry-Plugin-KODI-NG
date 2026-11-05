@@ -2245,8 +2245,11 @@ if (!function_exists('ko_rpc')) {
             /* Verlustfrei zusammensetzen statt einen Schluessel zu raten:
              * Kodi meldet mal message, mal data.stack.message. Alle lesbaren
              * Teile in ihrer Reihenfolge - dann traegt jede Form. */
+            /* 1.2.25 (KO-2): (array), denn "error" als Text brachte unter PHP 8 einen TypeError; der Cron-Lauf endete ohne
+             * Lebenszeichen, jede Minute wieder. */
             $teile = array();
-            array_walk_recursive($d['error'], function ($w) use (&$teile) {
+            $ko_err = (array) $d['error'];
+            array_walk_recursive($ko_err, function ($w) use (&$teile) {
                 if (is_scalar($w) && trim((string) $w) !== '') { $teile[] = (string) $w; }
             });
             return array(false, 'Kodi meldet: ' . implode(' / ', array_slice($teile, 0, 6)));
@@ -2273,12 +2276,17 @@ if (!function_exists('ko_kodi_zustand')) {
                       'meldung' => '');
         list($ok, $r) = ko_rpc('JSONRPC.Ping', null, $zeit);
         if (!$ok) { $leer['meldung'] = (string) $r; return $leer; }
+        /* 1.2.25 (KO-1): Kodi antwortet auf den Ping mit "pong". Bis 1.2.24 galt jede 200 mit JSON als Kodi; ein fremder
+         * Dienst auf dem Port ergab erreichbar 1 und stop, retained ueber den letzten echten Stand. */
+        if ($r !== 'pong') { $leer['meldung'] = 'Hier antwortet nicht Kodi: JSONRPC.Ping ergab kein pong'; return $leer; }
         $z = $leer;
         $z['erreichbar'] = 1;
 
         list($ok, $spieler) = ko_rpc('Player.GetActivePlayers', null, $zeit);
         if (!$ok) { $z['meldung'] = (string) $spieler; return $z; }
-        if (!is_array($spieler) || !$spieler) {
+        /* 1.2.25 (KO-1): ohne Liste ist das "nicht feststellbar"; "stop" heisst nur die leere Liste. */
+        if (!is_array($spieler)) { $z['meldung'] = 'Player.GetActivePlayers ohne Liste in der Antwort'; return $z; }
+        if (!$spieler) {
             $z['wiedergabe'] = 'stop';
             $z['titel_ok'] = true;
             return $z;
@@ -2728,6 +2736,8 @@ function ko_ansage_post(array $post)
         return array(false, $t, array());
     }
     $cfg['tts'] = $neu;
+    // 1.2.25: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 1.2.24 ueberschrieb es der naechste Abgleich.
+    $cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($post, isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array());
     $cfg['ansage_regeln'] = $r;
     $cfg['ansage_haken'] = $hk;
     $t = array();
@@ -4357,6 +4367,8 @@ if (!function_exists('ko_pruef_bruecke_kodi')) {
         if ((string) $cfg['befehle_mqtt_ein'] !== '1') { return array(-1, ko_t('TEST.A_BRUECKE_KODI_AUS')); }
         if (ko_paths()['home'] === '') { return array(-1, ko_t('TEST.A_BRUECKE_ARCHIV')); }
         $r = $erzeuger !== null ? call_user_func($erzeuger) : ko_rpc('JSONRPC.Ping', null, 3);
+        // 1.2.25 (KO-1): wie ko_kodi_zustand() nur mit "pong".
+        if (!empty($r[0]) && $r[1] !== 'pong') { $r = array(false, 'Hier antwortet nicht Kodi: JSONRPC.Ping ergab kein pong'); }
         if (!empty($r[0])) {
             return array(1, sprintf(ko_t('TEST.A_BRUECKE_KODI_OK'), ko_e((string) $cfg['kodi_port'])));
         }

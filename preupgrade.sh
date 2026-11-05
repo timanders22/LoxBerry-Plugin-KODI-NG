@@ -204,6 +204,7 @@ if [ -s "$BASE/config/plugins/$PDIR/kodi.json" ]; then
             echo "<FAIL> Platz und Rechte unter $BASE/data/plugins pruefen."
             echo "<FAIL> Die Aktualisierung wird abgebrochen, damit die Konfiguration"
             echo "<FAIL> nicht verlorengeht."
+            [ "$KO_MARKE_VORHER" = 1 ] || rm -f "$MARKE" 2>/dev/null
             exit 2
         fi
     else
@@ -213,6 +214,7 @@ if [ -s "$BASE/config/plugins/$PDIR/kodi.json" ]; then
             echo "<FAIL> Die bisherige Sicherung unter $SICHER bleibt unangetastet."
         fi
         echo "<FAIL> Die Aktualisierung wird abgebrochen, damit sie nicht verlorengeht."
+        [ "$KO_MARKE_VORHER" = 1 ] || rm -f "$MARKE" 2>/dev/null
         exit 2
     fi
 else
