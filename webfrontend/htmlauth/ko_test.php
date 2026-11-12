@@ -291,6 +291,17 @@ function ko_vorlagenprobe()
  * alle Schluessel fuehrte. Der Fehler faellt sonst erst auf, wenn jemand
  * zurueckspielt - also Monate spaeter und auf einem anderen Geraet.
  */
+function ko_ansage_vergleichsform(array $c)
+{
+    $ordnen = function ($x) use (&$ordnen) {
+        if (!is_array($x)) { return $x; }
+        ksort($x);
+        foreach ($x as $k => $w) { $x[$k] = $ordnen($w); }
+        return $x;
+    };
+    return (string) json_encode($ordnen(ko_ansage_fuer_sicherung($c)));
+}
+
 function ko_sicherungsprobe()
 {
     $text = ko_sicherung_text();
@@ -308,6 +319,17 @@ function ko_sicherungsprobe()
     foreach (ko_vorgaben() as $k => $v) {
         $a = isset($cfg[$k]) ? (string) $cfg[$k] : (string) $v;
         $b = isset($erg['cfg'][$k]) ? (string) $erg['cfg'][$k] : '';
+        /* 1.2.28: die Sprachansagen nach Inhalt vergleichen, nicht als Zeichenkette. Seit 1.2.24 traegt die
+         * Sicherung den Block ohne Sprechtoken und Vermerk, und das Zurueckspielen setzt die geltenden wieder ein
+         * (ko_ansage_sicherung_vor()); die base64-Zeichenkette kam deshalb auf jeder Anlage anders zurueck, und
+         * diese Zeile war immer ein Kreuz (gemessen: 1.2.23 Haken, 1.2.24 bis 1.2.27 Kreuz). Verglichen wird
+         * jetzt, was die Sicherung tragen soll - beide Seiten ueber ko_ansage_fuer_sicherung(), Schluessel
+         * geordnet. */
+        if ($k === 'ansage_block') {
+            $a = ko_ansage_vergleichsform(ko_ansage_cfg());
+            $bj = json_decode((string) base64_decode($b), true);
+            $b = is_array($bj) ? ko_ansage_vergleichsform($bj) : '';
+        }
         if ($a !== $b) { $ab[] = $k; }
     }
     if ($ab) {

@@ -4234,8 +4234,8 @@ if (!function_exists('ko_vorlage_mqtt_out')) {
         $o  = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
         $o .= '<VirtualOut HintText="" Title="Kodi Befehle (MQTT)" Comment="'
             . $x('Erzeugt vom LoxBerry-Plugin Kodi NG (' . date('d.m.Y') . '). UDP-Eingang des MQTT-Gateways auf dem '
-                . 'LoxBerry; wirkt nur mit dem Haken "Befehle ueber MQTT annehmen", "Kodi: beenden" zusaetzlich mit '
-                . '"Eingreifende Befehle ueber MQTT zulassen". Loxone Config legt beim Import neu an und ueberschreibt '
+                . 'LoxBerry; wirkt nur mit dem Haken "Befehle über MQTT annehmen", "Kodi: beenden" zusätzlich mit '
+                . '"Eingreifende Befehle über MQTT zulassen". Loxone Config legt beim Import neu an und überschreibt '
                 . 'nichts.')
             . '" Address="' . $x('/dev/udp/' . $host . '/' . ($port > 0 ? $port : 11884))
             . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;

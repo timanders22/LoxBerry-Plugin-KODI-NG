@@ -1,12 +1,17 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.27 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.28 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.28
+
+- **Reiter Test, Zeile „Übersteht die Sicherung eine Rundreise?“:** Seit 1.2.24 war sie auf jeder Anlage ein Kreuz mit „ansage_block“. Die Sicherung trägt die Sprachansagen bewusst ohne Sprechtoken, und das Zurückspielen setzt die geltenden Token wieder ein; die Zeile verglich trotzdem die verschlüsselte Zeichenkette. Jetzt vergleicht sie den Inhalt, den die Sicherung tragen soll. Fehlt beim Zurückspielen wirklich etwas, bleibt sie rot. An Sicherung und Zurückspielen selbst ändert sich nichts.
+- **Vorlage „Kodi Befehle (MQTT)“:** Die Beschreibung nennt die Haken jetzt mit ihrem Wortlaut aus der Oberfläche („Befehle über MQTT annehmen“, „Eingreifende Befehle über MQTT zulassen“) und mit Umlauten. Titel und Befehle sind unverändert; wer die Vorlage schon eingespielt hat, muss nichts tun.
 
 ## Neu in 1.2.27
 
