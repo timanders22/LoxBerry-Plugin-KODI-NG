@@ -1,5 +1,10 @@
 <?php
 require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der Sprachansagen schon beim ersten Lesen der Konfiguration
+/* 1.2.29: die Abschrift des gemeinsamen Sicherungsmoduls (Stammfassung Werkzeuge/gemeinsam/sicherung.php, byte-gleich,
+ * Werkzeuge/sicherung_einbauen.py) liegt neben dieser Datei. "Einstellungen sichern" und "Einstellungen zurueckspielen"
+ * laufen darueber, in allen Linien gleich (Auftrag des Hausherrn 12.11.2026); diese Linie uebergibt nur ihre
+ * Beschreibung (ko_sicherung_beschreibung()). */
+require_once __DIR__ . '/sicherung.php';
 /**
  * Kodi NG - gemeinsame Bibliothek
  *
@@ -2531,9 +2536,10 @@ if (!function_exists('ko_lokale_ip')) {
    schuetzt gegen fremde Absender; in einer Datei hat es nichts zu suchen. Wer
    beide verwechselt, macht aus der Umzugshilfe ein Leck. */
 
-/** Die Sicherung als Text - das Format ist "schluessel wert", eine Zeile je
- *  Wert, Kommentare mit #. */
-if (!function_exists('ko_sicherung_text')) {
+/* Seit 1.2.29 ist die Sicherung eine JSON-Datei des gemeinsamen Moduls (ko_sicherung_beschreibung() unten); bis
+ * 1.2.28 war sie Text, "schluessel wert", eine Zeile je Wert, Kommentare mit #. Solche Dateien wandelt
+ * ko_sicherung_aus_text() vor dem Zurueckspielen um. */
+if (!function_exists('ko_sicherung_beschreibung')) {
 /** Die Sprachansagen aus dem Feld der Hauptkonfiguration: was fehlt, kommt aus den Vorgaben (ab Werk EIN). */
 function ko_ansage_block_lesen()
 {
@@ -3006,102 +3012,134 @@ function ko_ansage_flanke($anlass, $gestoert, $name = '', $frist = 0, $jetzt = n
     return ko_ansage_legen(array($ein));
 }
 
-    function ko_sicherung_text()
+/** 1.2.29: Kopfzeile, mit der jede Textsicherung 1.2.3 bis 1.2.28 begann (gemessen 18.11.2026 an allen 26 Archiven;
+ *  ab 1.2.13 steht davor hoechstens eine Kommentarzeile "# _warnung ..."). */
+if (!defined('KO_TEXT_KOPF')) { define('KO_TEXT_KOPF', '# Kodi NG - Sicherung der Einstellungen'); }
+
+    /**
+     * 1.2.29: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul (bin/sicherung.php, Stammfassung
+     * 1.2.9). Bis 1.2.28 stand hier eine eigene Textsicherung (ko_sicherung_text(), "schluessel wert") mit eigener
+     * Lesefunktion (ko_sicherung_einlesen()).
+     *
+     * Kennzeichen: der Name des Repositorys. Eine Textsicherung bis 1.2.28 trug keines; ko_sicherung_aus_text()
+     * wandelt sie vor dem Modul in JSON ohne _plugin, mit dem Kopf _aus_textsicherung (die Kopfzeile KO_TEXT_KOPF)
+     * um (Entscheidung des Hausherrn 18.11.2026, "Linie wandelt vorweg um"), und der Uebersetzer
+     * ko_sicherung_alt_erkennen() erkennt sie daran; die Meldung sagt "aeltere Sicherung erkannt". Dieselbe Form wie
+     * WOLF-ISM-NG 3.1.22 und Smartmeter-classic 2.8.23 (Entscheidung des Hausherrn 18.11.2026, Frage 37 der Nacht:
+     * "Ich folge deinen Empfehlungen"); bis zu dieser Angleichung trug die umgewandelte Datei ein erfundenes
+     * frueheres Kennzeichen, das keine veroeffentlichte Fassung je schrieb. Seit Modul 1.2.11 (Entscheidung des
+     * Hausherrn 18.11.2026, Fragen 52 und 53: "ins Modul") wertet das Modul beide Koepfe selbst aus (Regel 21):
+     * K_AUS_TEXT sagt nach dem Zurueckspielen, dass umgewandelt wurde, und _text_mangel (feste Kennungen, eingetragen
+     * mit sicherung_text_mangel_eintragen()) weist die Datei mit den Saetzen des Moduls ab - in allen drei Linien
+     * gleich. Bis dahin standen Hinweis (SICH.TEXT_UMGEWANDELT) und Saetze (SICH.M_*) in dieser Linie.
+     *
+     * Inhalt oben: alle Schluessel aus ko_vorgaben(), darunter die Zugangsdaten kodi_user und kodi_pass; ein
+     * Aktionstoken hat diese Linie nicht. Die Sprachansagen reisen wie bisher als ansage_block (base64), ohne
+     * Sprechtoken und Vermerk; beim Zurueckspielen bleiben die geltenden (ko_ansage_aus_sicherung()), und eine Datei,
+     * die ein Sprechtoken traegt, wird abgewiesen. Ein gespeicherter Wert, den das Zurueckspielen abwiese (Befund U3),
+     * kommt wie bisher nicht in die Datei; der Kopf _warnung nennt seinen Namen (ko_sicherung_json()).
+     *
+     * Teile ausserhalb von kodi.json, wie bis 1.2.28 in der Datei:
+     *   autostart       systemctl is-enabled kodi_ng (ko_status()), nur wenn der Helfer ihn genannt hat
+     *   addon_<feld>    die sieben Felder im Kodi-Addon (ko_addon_lesen()), flach wie bisher ('teile_flach')
+     *   lizenz_<feld>   Seriennummer und Codec-Lizenzen (ko_status()), flach wie bisher
+     * Gelesen und geprueft werden sie vom Modul wie jeder andere Wert (Regel 2 bis 4: Unbekanntes verworfen und
+     * genannt, ein leeres Addon-Feld laesst das geltende stehen, ein ungueltiger Wert aendert gar nichts).
+     * Geschrieben werden sie erst nach dem Speichern von kodi.json, im Rueckruf 'nachziehen' des Knopfes
+     * (index.php, ko_sicherung_nachziehen()) - wie bis 1.2.28: Autostart und Addon ueber den Helfer, die vier
+     * Addon-Felder des Plugins mit dem Soll dieses Geraets (Befund U4), die Lizenzen nur mit Haken und bei gleicher
+     * Seriennummer. Ein Teil mit Lese- und Schreibweg ist genau das, wofuer das Modul 'teile' fuehrt; eine eigene
+     * Lesefunktion neben dem Modul braucht es dafuer nicht mehr.
+     *
+     * Was fehlen darf: alles - jeder Schluessel behaelt fehlend den geltenden Wert und wird genannt. So war es bis
+     * 1.2.28: ko_sicherung_einlesen() kannte keinen Pflichtschluessel und uebernahm nur, was in der Datei stand
+     * (eine Textsicherung fuehrt einen Wert nach U3 nur als Kommentar).
+     */
+    function ko_sicherung_beschreibung()
     {
-        $cfg = ko_config();
-        $st  = ko_status();
-        $addon = ko_addon_lesen();
-
-        $t  = "# Kodi NG - Sicherung der Einstellungen\n";
-        $t .= '# ' . date('d.m.Y H:i') . ' - ACHTUNG: enthaelt Zugangsdaten.'
-            . " Wie ein Passwort behandeln.\n";
-
-        foreach (ko_vorgaben() as $k => $vorgabe) {
-            $w = isset($cfg[$k]) ? (string) $cfg[$k] : (string) $vorgabe;
-            if ($k === 'ansage_block') { $w = base64_encode((string) json_encode(ko_ansage_fuer_sicherung(ko_ansage_cfg()))); }     // nie ein Sprechtoken
-            // Leere Werte als - schreiben: eine Zeile mit einem Feld waere
-            // beim Zurueckspielen eine Beanstandung, und ein Schluessel, der
-            // fehlt, kaeme aus der Vorgabe zurueck - genau das ist falsch,
-            // wenn jemand das Feld bewusst geleert hat.
-            /* Ein gespeicherter Wert, den das Zurueckspielen abweisen wuerde
-             * (Befund U3, 29.09.2026: Altwerte bis 1.2.6 wie "kodi+1"), kommt
-             * als _hinweis in die Datei, nicht als Datenzeile - sonst wies das
-             * Plugin seine EIGENE Sicherung ab, und mit ihr Passwort, Adresse
-             * und alle uebrigen Werte. Umgeschrieben wird nichts: beim
-             * Zurueckspielen bleibt der Schluessel auf dem Wert des
-             * Zielgeraets, und die Oberflaeche nennt den Wert (ko_cfg_altwerte). */
-            if (ko_wert_zurueckspielbar($k, $w) === null) {
-                $t .= '# _hinweis ' . $k . ': der gespeicherte Wert "'
-                    . ($k === 'kodi_pass' ? '***' : addcslashes($w, "\0..\37\177"))
-                    . '" ist nicht mehr zulaessig und wurde NICHT gesichert - bitte in der '
-                    . 'Oberflaeche berichtigen.' . "\n";
-                continue;
-            }
-            $t .= $k . ' ' . ($w === '' ? '-' : ko_sicherung_wert($w)) . "\n";
+        $p = ko_paths();
+        $vorgaben = ko_vorgaben();
+        $schluessel = array();
+        foreach (array_keys($vorgaben) as $k) {
+            if ($k === 'ansage_block') { continue; }
+            /* Dieselbe Pruefung wie bis 1.2.28 beim Zurueckspielen (ko_wert_zurueckspielbar(): strenger als das
+             * Formular, Rand und Steuerzeichen abgewiesen), gespeichert in deren Form. Nur Text: die eigene Datei
+             * traegt jeden Wert als Zeichenkette. Die Beanstandung nennt den Namen, nie den Wert. */
+            $schluessel[$k] = array(
+                'fehlt' => 'behalten',
+                'pruefen' => function ($w, $name) {
+                    return (is_string($w) && ko_wert_zurueckspielbar((string) $name, $w) !== null)
+                        ? '' : sprintf(ko_t('SICHERUNG.K_WERT'), ko_e((string) $name));
+                },
+                'wandeln' => function ($w) use ($k) { return ko_wert_zurueckspielbar($k, $w); },
+            );
         }
-
-        /* Der Autostart nur, wenn der Helfer ihn GENANNT hat.
-         *
-         * Bis 1.2.6 stand hier "sonst 0". Schwieg der Helfer, schrieb die
-         * Sicherung "autostart 0" - eine Aussage ueber etwas, das nicht
-         * gemessen war -, und das Zurueckspielen schaltete den Autostart auf
-         * dem Zielgeraet dann AKTIV AB. Fuer die Addon-Felder darunter war
-         * derselbe Fall schon richtig geloest; jetzt gilt es fuer beide. */
-        if (isset($st['kodiautostart'])) {
-            $t .= 'autostart ' . ((int) $st['kodiautostart'] ? '1' : '0') . "\n";
-        } else {
-            $t .= "# Der Autostart war nicht feststellbar (der Helfer hat nicht\n"
-                . "# geantwortet) und fehlt deshalb. Beim Zurueckspielen bleibt er\n"
-                . "# auf dem Zielgeraet, wie er ist.\n";
-        }
-
-        $plugin_felder = array_keys(ko_addon_soll());
-        foreach (ko_addon_schluessel() as $k) {
-            if ($addon === null) { continue; }
-            $w = isset($addon[$k]) ? (string) $addon[$k] : '';
-            /* Ein Wert in einem Feld DES ANWENDERS, den das Plugin beim
-             * Zurueckspielen abweisen wuerde, kommt als KOMMENTAR hinein.
-             * Kodis Einstellungsdialog laesst etwa udp_port = 0 zu; stand das
-             * als Datenzeile in der Datei, wies das Plugin seine EIGENE
-             * Sicherung ab - und mit ihr Adresse, Thema und Passwort, die
-             * damit nichts zu tun haben. Verloren geht nichts, der Kommentar
-             * nennt den Wert.
-             *
-             * Die vier Felder DES PLUGINS bleiben Datenzeilen: ein ungueltiges
-             * Thema dort ist ein Fehler, den die Rundreise-Pruefzeile zeigen
-             * soll, und kein Wert, den man still beiseitelegt. */
-            if ($w !== '' && !in_array($k, $plugin_felder, true) && ko_addon_wert_pruefen($k, $w) === null) {
-                $t .= '# addon_' . $k . ' steht in Kodi auf "' . str_replace(array("\r", "\n"), ' ', $w)
-                    . '" - das nimmt das Plugin nicht an; beim Zurueckspielen bleibt das Feld unberuehrt.' . "\n";
-                continue;
-            }
-            $t .= 'addon_' . $k . ' ' . ($w === '' ? '-' : ko_sicherung_wert($w)) . "\n";
-        }
-        if ($addon === null) {
-            $t .= "# Die Addon-Einstellungen waren nicht lesbar und fehlen deshalb\n"
-                . "# in dieser Sicherung. Ein leerer Platz ist keine leere Angabe.\n";
-        }
-
-        /* Die Lizenzen: mit der Seriennummer, fuer die sie gelten. */
-        $serie = isset($st['piserial']) ? trim((string) $st['piserial']) : '';
-        $mp = isset($st['mpeg2lic']) ? trim((string) $st['mpeg2lic']) : '';
-        $vc = isset($st['vc1lic']) ? trim((string) $st['vc1lic']) : '';
-        if ($serie !== '' && $serie !== 'Not found' && ($mp !== '' || $vc !== '')) {
-            $t .= "#\n# Codec-Lizenzen. Sie gelten fuer GENAU DIESE Seriennummer und sind\n"
-                . "# auf einem anderen Pi wertlos. Zurueckgespielt werden sie nur, wenn\n"
-                . "# der Haken gesetzt ist UND die Seriennummer uebereinstimmt.\n";
-            $t .= 'lizenz_serie ' . ko_sicherung_wert($serie) . "\n";
-            if ($mp !== '') { $t .= 'lizenz_mpeg2 ' . ko_sicherung_wert($mp) . "\n"; }
-            if ($vc !== '') { $t .= 'lizenz_vc1 ' . ko_sicherung_wert($vc) . "\n"; }
-        }
-        return $t;
+        $schluessel['ansage_block'] = array(
+            'fehlt' => 'behalten',
+            'pruefen' => function ($w) {
+                if ($w === '') { return ''; }
+                if (ko_ansage_aus_sicherung($w) !== null) { return ''; }
+                /* 18.11.2026 (Frage 43 der Nacht, "Ich folge deinen Empfehlungen"): traegt der Block ein Sprechtoken,
+                 * sagt die Meldung das mit dem Namen des Felds (tts.alexa_token ...), nie mit dem Wert. Bis dahin
+                 * stand dafuer wie fuer jeden anderen Mangel nur "Die Sprachansagen liessen sich nicht speichern". */
+                $j = is_string($w) ? json_decode((string) base64_decode($w), true) : null;
+                $tm = (is_array($j) && isset($j['tts']) && is_array($j['tts'])) ? ansage_sicherung_mangel($j['tts']) : array();
+                return $tm ? sprintf(ko_t('SICH.M_SPRECHTOKEN'), ko_e(implode(', ', $tm))) : ko_t('ANSAGEPLUGIN.M_FEHL');
+            },
+            /* Traegt die Datei inhaltlich dieselben Sprachansagen wie der geltende Stand (ohne den Vermerk
+             * ansage_aus_datei), bleibt der gespeicherte Wert byte-gleich - auch ein leerer (nie gespeichert = die
+             * Vorgaben). Sonst hiesse schon das Zurueckspielen der eigenen, unveraenderten Sicherung "geaendert"
+             * (gemessen 18.11.2026 mit dem Pruefstand, Zeile unveraendert). Sonst wie bis 1.2.28. */
+            'wandeln' => function ($w) {
+                if ($w === '') { return ''; }
+                $j = ko_ansage_aus_sicherung($w);
+                $c = ko_config();
+                $jetzt = isset($c['ansage_block']) ? (string) $c['ansage_block'] : '';
+                if (is_array($j) && ko_ansage_inhalt($j) === ko_ansage_inhalt(ko_ansage_cfg())) { return $jetzt; }
+                return base64_encode((string) json_encode($j));
+            },
+            // nie ein Sprechtoken, nie der Herkunftsvermerk (ko_ansage_fuer_sicherung())
+            'sichern' => function () {
+                return base64_encode((string) json_encode(ko_ansage_fuer_sicherung(ko_ansage_cfg())));
+            },
+        );
+        /* Die beiden flachen Teile als Bloecke: ein unbekanntes Feld (addon_xyz) wird verworfen und genannt. Ohne
+         * 'fehlt': ein Feld, das die Datei nicht traegt, wird nicht geschrieben und bleibt, wie es ist. */
+        $schluessel['addon'] = sicherung_block(ko_addon_schluessel());
+        $schluessel['lizenz'] = sicherung_block(array('serie', 'mpeg2', 'vc1'));
+        return array(
+            'kennzeichen' => 'LoxBerry-Plugin-KODI-NG',
+            'uebersetzer' => 'ko_sicherung_alt_erkennen',
+            'hinweis' => ko_t('SICH.KOPF_HINWEIS'),
+            /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. plugin.cfg (sicherung_fassung_lesen()). */
+            'home' => (string) $p['home'],
+            'ordner' => (string) $p['plugin'],
+            'plugin_cfg' => dirname(__DIR__) . '/plugin.cfg',
+            'vorgaben' => $vorgaben,
+            'schluessel' => $schluessel,
+            'teile' => array('autostart' => 'ko_sicherung_teil_autostart', 'addon' => 'ko_sicherung_teil_addon',
+                             'lizenz' => 'ko_sicherung_teil_lizenz'),
+            'teile_flach' => array('addon' => 'addon_', 'lizenz' => 'lizenz_'),
+            // Regel 3 im Addon: ein leeres Feld laesst den Wert stehen, der jetzt im Addon steht
+            'teile_jetzt' => array('addon' => function () {
+                $a = ko_addon_lesen();
+                return is_array($a) ? $a : null;
+            }),
+            /* Was ko_sicherung_aus_text() in einer Textsicherung nicht lesen konnte (Kopf _text_mangel), weist seit
+             * Modul 1.2.11 das Modul selbst ab, mit seinen Saetzen (Regel 21); eine eigene Querpruefung ('quer',
+             * ko_sicherung_quer()) braucht es dafuer nicht mehr. */
+            'jetzt' => 'ko_sicherung_jetzt',
+            't' => 'ko_t',
+            'e' => 'ko_e',
+        );
     }
 }
 
 /** Gespeicherte Werte, die das Zurueckspielen abweisen wuerde (Befund U3).
  *  Rueckgabe: array(schluessel => wert). Die Oberflaeche nennt sie im Reiter
  *  Einstellungen am Knopf "Einstellungen sichern"; die Sicherung fuehrt sie
- *  nur als _hinweis. Geaendert wird nichts. */
+ *  nicht, ihr Kopf _warnung nennt nur den Namen (seit 1.2.29; bis 1.2.28 ein
+ *  Kommentar # _hinweis mit dem Wert). Geaendert wird nichts. */
 if (!function_exists('ko_cfg_altwerte')) {
     function ko_cfg_altwerte()
     {
@@ -3115,73 +3153,100 @@ if (!function_exists('ko_cfg_altwerte')) {
     }
 }
 
-/** X-3 (Verbesserungsbau 01.10.2026): Wuerde die EIGENE Sicherung beim
- *  Zurueckspielen abgewiesen? Sie wird gebaut (oder als $text uebergeben)
- *  und durch DIESELBE ko_sicherung_einlesen() geschickt wie beim
- *  Zurueckspielen. Rueckgabe: die NAMEN der beanstandeten Schluessel, nie
- *  Werte; leer = sie liesse sich zurueckspielen. Anders als
- *  ko_cfg_altwerte() (Werte aus kodi.json, die die Sicherung nur als Hinweis
- *  fuehrt) trifft das auch die Addon-Felder des Plugins und die Lizenzzeilen,
- *  die als Datenzeilen in der Datei stehen.
- *  Der Name traegt bewusst kein "sicherung": das Kettenwerkzeug
- *  sicherung_pruefen.py nimmt die erste Funktion *_sicherung* als Ausfuhr. */
-if (!function_exists('ko_rueckspiel_befund')) {
-    function ko_rueckspiel_befund($text = null)
+/** 1.2.29: die geltende Konfiguration fuer das Modul ('jetzt'). Bauform des Moduls (Entscheidung des Hausherrn
+ *  15.11.2026): die Lesefunktion sortiert nichts aus. ko_config() laesst jeden Schluessel stehen, entfernt aber ein
+ *  Feld, ein Objekt und null (sonst warf htmlspecialchars() unter PHP 8.4 einen TypeError); ein solcher Schluessel,
+ *  den diese Fassung nicht kennt, kommt hier aus der Datei dazu, damit das Zurueckspielen ihn beim Entfernen nennt.
+ *  Ein bekannter Schluessel behaelt den Wert aus ko_config() - wie bis 1.2.28 beim Zurueckspielen. */
+if (!function_exists('ko_sicherung_jetzt')) {
+    function ko_sicherung_jetzt()
     {
-        $t = $text === null ? ko_sicherung_text() : (string) $text;
-        $namen = array();
-        list($erg) = ko_sicherung_einlesen($t, $namen);
-        if ($erg !== null) { return array(); }
-        $l = array();
-        foreach ($namen as $n) { $l[] = preg_replace('/[^a-z0-9_.-]/', '?', strtolower((string) $n)); }
-        $l = array_values(array_unique($l));
-        return $l ? $l : array('?');
-    }
-}
-
-/** X-3, angeglichen an die uebrigen Linien (Verbesserungsbau 01.10.2026;
- *  Entscheidung 13): bestuende ein gespeicherter Wert das Zurueckspielen
- *  nicht, nennt der Kopf der Datei ihn - mit dem NAMEN, nie dem Wert.
- *  Geliefert wird trotzdem vollstaendig. Die Zeile ist ein Kommentar; das
- *  Zurueckspielen ueberliest sie. Gezaehlt werden die Werte, die die
- *  Sicherung nur als _hinweis fuehrt (U3, ko_cfg_altwerte()), und alles,
- *  woran die eigene Datei beim Zurueckspielen scheitern wuerde
- *  (ko_rueckspiel_befund()). */
-if (!function_exists('ko_warnkopf_setzen')) {
-    function ko_warnkopf_setzen($txt)
-    {
-        $namen = array_values(array_unique(array_merge(array_keys(ko_cfg_altwerte()),
-            ko_rueckspiel_befund($txt))));
-        if (!$namen) { return (string) $txt; }
-        return '# _warnung ' . str_replace(array("\r", "\n"), ' ',
-            sprintf(ko_t('SICH.WARNUNG_KOPF'), implode(', ', $namen))) . "\n" . $txt;
-    }
-}
-
-/** Ein Wert in der Sicherungsdatei darf keinen Leerraum enthalten - sonst
- *  zerfaellt die Zeile beim Einlesen in mehr als zwei Felder. Betroffen sind
- *  in der Praxis nur Passwoerter. Ein solcher Wert wird deshalb hexadezimal
- *  hinterlegt und beim Einlesen zurueckverwandelt; ein GEKUERZTES Passwort
- *  waere schlimmer als ein unleserliches. */
-if (!function_exists('ko_sicherung_wert')) {
-    function ko_sicherung_wert($w)
-    {
-        $w = (string) $w;
-        /* Der Bindestrich steht in der Datei fuer den LEEREN Wert. Ein Wert,
-         * der wirklich aus einem einzelnen Bindestrich besteht, muss deshalb
-         * hexadezimal hinterlegt werden - sonst kaeme er leer zurueck.
-         * Gemessen an der Rundreise: mit kodi_pass = "-" meldete der Reiter
-         * Test eine Abweichung, und beim echten Zurueckspielen waere das
-         * Passwort still geloescht worden. */
-        if ($w !== '-' && $w !== ''
-            && preg_match('/^[\x21-\x7E]+$/', $w) && strpos($w, '=hex:') !== 0) {
-            return $w;
+        $c = ko_config(true);
+        foreach (ko_json_lesen(ko_paths()['config']) as $k => $v) {
+            if (!array_key_exists($k, $c)) { $c[$k] = $v; }
         }
-        if ($w === '') { return '-'; }
-        return '=hex:' . bin2hex($w);
+        return $c;
     }
 }
 
+/** 1.2.29: die Sicherungsdatei als JSON-Text (Knopf "Einstellungen sichern"); false, wenn sie sich nicht bilden laesst.
+ *  Kopf und Inhalt baut das Modul. Was bis 1.2.28 als Kommentar in der Textdatei stand, sagt jetzt der Kopf _warnung,
+ *  nur mit Namen: ein gespeicherter Wert, den das Zurueckspielen abwiese (U3; er fehlt in der Datei), ein Autostart,
+ *  den der Helfer nicht nannte, nicht lesbare Addon-Einstellungen, ein Addon-Feld des Anwenders, das das Plugin nicht
+ *  annimmt (es fehlt in der Datei, beim Zurueckspielen bleibt es unberuehrt). Wuerde das Zurueckspielen die Datei
+ *  trotzdem abweisen, haengt das Modul die Namen an (X-3); geliefert wird sie trotzdem. */
+if (!function_exists('ko_sicherung_json')) {
+    function ko_sicherung_json()
+    {
+        $b = ko_sicherung_beschreibung();
+        $cfg = ko_config();
+        $saetze = array();
+        foreach (array_keys(ko_cfg_altwerte()) as $k) {
+            unset($cfg[$k]);
+            $saetze[] = sprintf(ko_t('SICH.W_ALTWERT'), $k);
+        }
+        $st = ko_status();
+        $teile = array();
+        /* Der Autostart nur, wenn der Helfer ihn GENANNT hat (wie seit 1.2.7): "sonst 0" schaltete ihn beim
+         * Zurueckspielen auf dem Zielgeraet ab. */
+        if (isset($st['kodiautostart'])) {
+            $teile['autostart'] = ((int) $st['kodiautostart']) ? '1' : '0';
+        } else {
+            $saetze[] = ko_t('SICH.W_AUTOSTART');
+        }
+        $addon = ko_addon_lesen();
+        if (is_array($addon)) {
+            $plugin_felder = array_keys(ko_addon_soll());
+            $a = array();
+            foreach (ko_addon_schluessel() as $f) {
+                $w = isset($addon[$f]) ? (string) $addon[$f] : '';
+                /* Ein Feld DES ANWENDERS, das das Plugin nicht annaehme (Kodis Dialog laesst etwa udp_port = 0 zu),
+                 * fehlt in der Datei, sonst wiese das Plugin seine eigene Sicherung ab. Die vier Felder DES PLUGINS
+                 * bleiben drin: ein ungueltiger Wert dort ist ein Fehler, den die Rundreise zeigen soll. */
+                if ($w !== '' && !in_array($f, $plugin_felder, true) && ko_addon_wert_pruefen($f, $w) === null) {
+                    $saetze[] = sprintf(ko_t('SICH.W_ADDON_FELD'), 'addon_' . $f);
+                    continue;
+                }
+                $a[$f] = $w;
+            }
+            $teile['addon'] = $a;
+        } else {
+            $saetze[] = ko_t('SICH.W_ADDON');
+        }
+        /* Die Lizenzen: mit der Seriennummer, fuer die sie gelten. */
+        $serie = isset($st['piserial']) ? trim((string) $st['piserial']) : '';
+        $mp = isset($st['mpeg2lic']) ? trim((string) $st['mpeg2lic']) : '';
+        $vc = isset($st['vc1lic']) ? trim((string) $st['vc1lic']) : '';
+        if ($serie !== '' && $serie !== 'Not found' && ($mp !== '' || $vc !== '')) {
+            $l = array('serie' => $serie);
+            if ($mp !== '') { $l['mpeg2'] = $mp; }
+            if ($vc !== '') { $l['vc1'] = $vc; }
+            $teile['lizenz'] = $l;
+        }
+        $b['warnung'] = function () use ($saetze) { return $saetze; };
+        $js = sicherung_json(sicherung_bauen($b, $cfg, $teile));
+        return $js === '' ? false : $js;
+    }
+}
+
+/** X-3 (Verbesserungsbau 01.10.2026): Wuerde die EIGENE Sicherung beim Zurueckspielen abgewiesen? Seit 1.2.29 mit dem
+ *  Modul (sicherung_selbstpruefung()) - DERSELBEN Pruefung wie beim Zurueckspielen. Rueckgabe: die NAMEN der
+ *  beanstandeten Einstellungen, nie Werte; leer = sie liesse sich zurueckspielen. Die Werte, die die Sicherung nach
+ *  U3 gar nicht fuehrt, nennt ko_cfg_altwerte().
+ *  Der Name traegt bewusst kein "sicherung": das Kettenwerkzeug sicherung_pruefen.py nimmt die erste Funktion
+ *  *_sicherung* als Ausfuhr. */
+if (!function_exists('ko_rueckspiel_befund')) {
+    function ko_rueckspiel_befund()
+    {
+        $js = ko_sicherung_json();
+        $d = $js === false ? null : json_decode($js, true);
+        if (!is_array($d)) { return array('?'); }
+        return sicherung_selbstpruefung(ko_sicherung_beschreibung(), $d, ko_sicherung_jetzt());
+    }
+}
+
+/** Ein Wert einer Textsicherung bis 1.2.28: "-" steht fuer den leeren Wert, "=hex:..." fuer einen Wert mit Leerraum
+ *  oder ausserhalb von ASCII (bis 1.2.28 ko_sicherung_wert()). Rueckgabe der Wert, oder null, wenn er beschaedigt ist. */
 if (!function_exists('ko_sicherung_rohwert')) {
     function ko_sicherung_rohwert($w)
     {
@@ -3195,126 +3260,162 @@ if (!function_exists('ko_sicherung_rohwert')) {
     }
 }
 
-/**
- * Eine hochgeladene Sicherung pruefen.
- *
- * Rueckgabe: array($ergebnis, $beanstandungen)
- * $ergebnis ist null, sobald EINE Beanstandung vorliegt - eine halb gueltige
- * Datei ueberschreibt NICHTS. Und es werden ALLE Beanstandungen gesammelt:
- * wer nur die erste zeigt, schickt den Anwender in eine Schleife aus je einem
- * Fund pro Anlauf.
- *
- * $ergebnis: array('cfg' => …, 'autostart' => 0|1|null,
- *                  'addon' => array(), 'lizenz' => array())
- */
-if (!function_exists('ko_sicherung_einlesen')) {
-    function ko_sicherung_einlesen($roh, &$namen = null)
+/** 1.2.29: die Sprachansagen aus der Sicherung (ansage_block, base64) - wie bis 1.2.28 in ko_sicherung_einlesen():
+ *  geltende Sprechtoken und Vermerk bleiben, eine Datei mit Sprechtoken wird abgewiesen, jeder Schluessel geprueft.
+ *  Rueckgabe das Feld, oder null, wenn es nicht taugt. */
+if (!function_exists('ko_ansage_aus_sicherung')) {
+    function ko_ansage_aus_sicherung($w)
     {
-        $mangel = array();
-        /* X-3 (Verbesserungsbau 01.10.2026): die NAMEN der beanstandeten
-         * Schluessel, nie ihre Werte - fuer ko_rueckspiel_befund(). */
-        $namen = array();
-        $cfg = array();
-        $addon = array();
-        $lizenz = array();
-        $autostart = null;
-        $gefunden = 0;
+        if (!is_string($w) || $w === '') { return null; }
+        $j = json_decode(ko_ansage_sicherung_vor((string) base64_decode($w)), true);
+        if (!is_array($j)) { return null; }
+        foreach ($j as $a => $x) {
+            if (ko_ansage_wert($a, $x) !== true) { return null; }
+        }
+        return $j;
+    }
+}
+
+/** 1.2.29: der Inhalt der Sprachansagen zum Vergleich - Schluessel geordnet, in der Form der Sicherung
+ *  (ko_ansage_fuer_sicherung(): ohne Sprechtoken, ohne die Vermerke) und dazu der Herkunftsvermerk. Die Sprechtoken
+ *  zaehlen nicht: das Zurueckspielen setzt immer die geltenden ein, und ein fehlendes Token-Feld kommt dabei als
+ *  leeres zurueck (gemessen 18.11.2026). ansage_aus_datei setzt das Zurueckspielen auf 1; er zaehlt nicht. */
+if (!function_exists('ko_ansage_inhalt')) {
+    function ko_ansage_inhalt(array $c)
+    {
+        $h = isset($c['ansage_token_herkunft']) ? $c['ansage_token_herkunft'] : array();
+        $c = ko_ansage_fuer_sicherung($c);
+        $c['ansage_token_herkunft'] = $h;
+        $ordnen = function ($x) use (&$ordnen) {
+            if (!is_array($x)) { return $x; }
+            ksort($x);
+            foreach ($x as $k => $w) { $x[$k] = $ordnen($w); }
+            return $x;
+        };
+        return (string) json_encode($ordnen($c));
+    }
+}
+
+/** 1.2.29: die Teile der Sicherung (Rueckruf 'teile' des Moduls). Rueckgabe array(Wert|null, Beanstandungen); die
+ *  Beanstandung nennt den Namen wie in der Datei, nie den Wert. Geschrieben wird erst in ko_sicherung_nachziehen(). */
+if (!function_exists('ko_sicherung_teil_autostart')) {
+    function ko_sicherung_teil_autostart($w)
+    {
+        if ($w === '0' || $w === '1') { return array($w, array()); }
+        return array(null, array(sprintf(ko_t('SICHERUNG.K_WERT'), 'autostart')));
+    }
+}
+
+if (!function_exists('ko_sicherung_teil_addon')) {
+    function ko_sicherung_teil_addon($w)
+    {
+        if (!is_array($w)) { return array(null, array(sprintf(ko_t('SICHERUNG.K_WERT'), 'addon'))); }
+        $gut = array();
+        $m = array();
+        foreach ($w as $f => $v) {
+            $g = is_string($v) ? ko_addon_wert_pruefen((string) $f, $v) : null;
+            if ($g === null) {
+                $m[] = sprintf(ko_t('SICHERUNG.K_WERT'), ko_e(sicherung_name('addon_' . $f)));
+                continue;
+            }
+            $gut[(string) $f] = $g;
+        }
+        return $m ? array(null, $m) : array($gut, array());
+    }
+}
+
+if (!function_exists('ko_sicherung_teil_lizenz')) {
+    function ko_sicherung_teil_lizenz($w)
+    {
+        if (!is_array($w)) { return array(null, array(sprintf(ko_t('SICHERUNG.K_WERT'), 'lizenz'))); }
+        $gut = array();
+        $m = array();
+        foreach ($w as $f => $v) {
+            /* Seriennummer und Lizenzschluessel: enge Positivliste wie bis 1.2.28 - diese Werte gehen ueber den
+             * Helfer in die BOOTKONFIGURATION. \z statt $: $ liesse einen Zeilenumbruch am Ende durch. */
+            if (!is_string($v) || !preg_match('/^[A-Za-z0-9._-]{1,32}\z/', $v)) {
+                $m[] = sprintf(ko_t('SICHERUNG.K_WERT'), ko_e(sicherung_name('lizenz_' . $f)));
+                continue;
+            }
+            $gut[(string) $f] = $v;
+        }
+        return $m ? array(null, $m) : array($gut, array());
+    }
+}
+
+/**
+ * 1.2.29: eine Textsicherung bis 1.2.28 vor dem Modul in die JSON-Form dieser Fassung umwandeln (Entscheidung des
+ * Hausherrn 18.11.2026, "Linie wandelt vorweg um"; das Modul weist Nicht-JSON ab und bleibt unveraendert).
+ *
+ * Erkannt wird sie nur an ihrer Kopfzeile KO_TEXT_KOPF (davor hoechstens Leerzeilen und "# _warnung"); jede andere
+ * Datei geht unveraendert an das Modul (JSON, oder eine fremde Datei, die dort mit K_KEIN_JSON abgewiesen wird). Bis
+ * 1.2.28 nahm das Zurueckspielen jede Textdatei, deren Zeilen es kannte.
+ *
+ * Gelesen wird wie bis 1.2.28 in ko_sicherung_einlesen(): Zeilen mit # sind Kommentar, je Zeile "schluessel wert",
+ * Schluessel klein, "-" leer, "=hex:" hexadezimal. Jeder Schluessel kommt unter seinem Namen in die JSON-Datei, auch
+ * ein unbekannter: den verwirft das Modul und nennt ihn (bis 1.2.28 wies er die ganze Datei ab). Was sich keinem Wert
+ * zuordnen laesst - eine Zeile ohne genau zwei Felder, ein doppelter Schluessel, ein beschaedigter =hex:-Wert, ein Wert
+ * oder Name, der kein UTF-8 ist, ein Schluessel mit _ am Anfang (so heisst in der JSON-Datei nur der Kopf, das Modul
+ * ueberginge ihn still) -, wird nicht verschluckt und nicht zurechtgebogen: es steht mit Stelle und fester Kennung
+ * im Kopf _text_mangel (sicherung_text_mangel_eintragen(): ZEILE, KOPF, DOPPELT, WERT), und das Modul weist die ganze
+ * Datei ab, wie bis 1.2.28 (seit Modul 1.2.11 mit seinen Saetzen, Regel 21). Die JSON-Datei traegt kein _plugin,
+ * sondern den Kopf _aus_textsicherung mit der Kopfzeile KO_TEXT_KOPF; daran erkennt sie der Uebersetzer
+ * ko_sicherung_alt_erkennen() (Form wie WOLF-ISM-NG 3.1.22, Frage 37), und das Modul sagt nach dem Zurueckspielen,
+ * dass umgewandelt wurde (K_AUS_TEXT).
+ *
+ * $umgewandelt sagt dem Aufrufer, ob umgewandelt wurde (seit Modul 1.2.11 ohne Verwendung im Knopf; der Hinweis kommt
+ * aus dem Modul).
+ */
+if (!function_exists('ko_sicherung_aus_text')) {
+    function ko_sicherung_aus_text($roh, &$umgewandelt = null)
+    {
+        $umgewandelt = false;
+        if (!is_string($roh)) { return $roh; }
+        $t = substr($roh, 0, 3) === "\xEF\xBB\xBF" ? substr($roh, 3) : $roh;
+        $zeilen = preg_split('/\R/', $t);
+        if (!is_array($zeilen)) { return $roh; }
+        $kopf = false;
+        foreach ($zeilen as $z) {
+            $z = trim($z);
+            if ($z === '' || $z === '# _warnung' || strpos($z, '# _warnung ') === 0) { continue; }
+            $kopf = ($z === KO_TEXT_KOPF);
+            break;
+        }
+        if (!$kopf) { return $roh; }
+        $umgewandelt = true;
+
+        $d = array('_aus_textsicherung' => KO_TEXT_KOPF);
         $gesehen = array();
-
-        $vorgaben = ko_vorgaben();
-        $addon_bekannt = ko_addon_schluessel();
-        $lizenz_bekannt = array('lizenz_serie', 'lizenz_mpeg2', 'lizenz_vc1');
-
-        foreach (preg_split('/\R/', (string) $roh) as $z) {
-            $t = trim($z);
-            if ($t === '' || $t[0] === '#') { continue; }
-            $f = preg_split('/\s+/', $t);
-            if (count($f) !== 2) {
-                $mangel[] = sprintf(ko_t('SICH.M_ZEILE'), ko_e(substr($t, 0, 80)));
-                $namen[] = substr(strtolower($f[0]), 0, 60);
-                continue;
-            }
-            $k = strtolower($f[0]);
-            /* Ein Schluessel, der zweimal dasteht, ist eine Beanstandung
-             * (Befund U5, 29.09.2026) - bis 1.2.11 gewann still der letzte.
-             * Geprueft am Rohtext, vor jeder Wertpruefung. */
-            if (isset($gesehen[$k])) {
-                $mangel[] = sprintf(ko_t('SICH.M_DOPPELT'), ko_e(substr($k, 0, 60)));
-                $namen[] = substr($k, 0, 60);
-                continue;
-            }
+        foreach ($zeilen as $z) {
+            $z = trim($z);
+            if ($z === '' || $z[0] === '#') { continue; }
+            $f = preg_split('/\s+/', $z);
+            $k = strtolower((string) $f[0]);
+            // Ein Name, der kein UTF-8 ist, liesse sich nicht als JSON schreiben; er wird lesbar gemacht und genannt.
+            $kn = preg_match('//u', $k) ? $k : (string) preg_replace('/[^\x20-\x7E]/', '?', $k);
+            if (count($f) !== 2 || $kn !== $k) { sicherung_text_mangel_eintragen($d, $kn, 'ZEILE'); continue; }
+            if ($k[0] === '_') { sicherung_text_mangel_eintragen($d, $k, 'KOPF'); continue; }
+            /* Ein Schluessel, der zweimal dasteht (Befund U5, 29.09.2026): welcher Wert gelten soll, ist nicht zu
+             * entscheiden - die Datei wird abgewiesen, wie bis 1.2.28. */
+            if (isset($gesehen[$k])) { sicherung_text_mangel_eintragen($d, $k, 'DOPPELT'); continue; }
             $gesehen[$k] = true;
             $w = ko_sicherung_rohwert($f[1]);
-            if ($w === null) {
-                $mangel[] = sprintf(ko_t('SICH.M_WERT'), ko_e($k));
-                $namen[] = $k;
-                continue;
-            }
-
-            if ($k === 'ansage_block') {     // Sprachansagen: eigene Pruefung; Token und Vermerk bleiben die geltenden. Fehlt die Zeile (aeltere Sicherung), bleibt der Stand
-                if ($w === '') { continue; }
-                $ko_j = json_decode(ko_ansage_sicherung_vor((string) base64_decode($w)), true);
-                $ko_g = is_array($ko_j);
-                foreach (is_array($ko_j) ? $ko_j : array() as $ko_a => $ko_b) { if (ko_ansage_wert($ko_a, $ko_b) !== true) { $ko_g = false; } }
-                if (!$ko_g) { $mangel[] = ko_t('ANSAGEPLUGIN.M_FEHL'); $namen[] = $k; continue; }
-                $cfg[$k] = base64_encode((string) json_encode($ko_j));
-                $gefunden++;
-                continue;
-            }
-            if (array_key_exists($k, $vorgaben)) {
-                // Strenger als das Formular: Rand und Steuerzeichen werden
-                // abgewiesen, nicht gekuerzt (Befund U2).
-                $gut = ko_wert_zurueckspielbar($k, $w);
-                if ($gut === null) {
-                    $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
-                    $namen[] = $k;
-                    continue;
-                }
-                $cfg[$k] = $gut;
-                $gefunden++;
-            } elseif ($k === 'autostart') {
-                if (!in_array($w, array('0', '1'), true)) {
-                    $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
-                    $namen[] = $k;
-                    continue;
-                }
-                $autostart = (int) $w;
-                $gefunden++;
-            } elseif (strpos($k, 'addon_') === 0
-                      && in_array(substr($k, 6), $addon_bekannt, true)) {
-                $feld = substr($k, 6);
-                $gut = ko_addon_wert_pruefen($feld, $w);
-                if ($gut === null) {
-                    $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
-                    $namen[] = $k;
-                    continue;
-                }
-                $addon[$feld] = $gut;
-                $gefunden++;
-            } elseif (in_array($k, $lizenz_bekannt, true)) {
-                // Lizenzschluessel und Seriennummer: enge Positivliste. Diese
-                // Werte gehen ueber den Helfer in die BOOTKONFIGURATION.
-                if (!preg_match('/^[A-Za-z0-9._-]{1,32}$/', $w)) {
-                    $mangel[] = sprintf(ko_t('SICH.M_UNZULAESSIG'), ko_e($k), ko_e(substr($w, 0, 40)));
-                    $namen[] = $k;
-                    continue;
-                }
-                $lizenz[$k] = $w;
-                $gefunden++;
-            } else {
-                // Unbekannte Schluessel sind eine Beanstandung, kein stiller
-                // Verlust - sonst schluckt dieses Plugin die Sicherung eines
-                // anderen und meldet Erfolg.
-                $mangel[] = sprintf(ko_t('SICH.M_SCHLUESSEL'), ko_e(substr($k, 0, 60)));
-                $namen[] = substr($k, 0, 60);
-            }
+            if ($w === null || !preg_match('//u', $w)) { sicherung_text_mangel_eintragen($d, $k, 'WERT'); continue; }
+            $d[$k] = $w;
         }
+        $js = json_encode($d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return is_string($js) ? $js : $roh;
+    }
+}
 
-        if ($gefunden === 0) { $mangel[] = ko_t('SICH.M_LEER'); }
-        if ($mangel) { return array(null, $mangel); }
-
-        return array(array('cfg' => $cfg, 'autostart' => $autostart,
-                           'addon' => $addon, 'lizenz' => $lizenz), array());
+/** 1.2.29: der Uebersetzer (Rueckruf 'uebersetzer' des Moduls, nur fuer eine Datei ohne _plugin): angenommen wird nur
+ *  die Umwandlung einer Textsicherung dieser Linie (Kopf _aus_textsicherung mit der Kopfzeile KO_TEXT_KOPF,
+ *  ko_sicherung_aus_text()). Jede andere Datei ohne Kennzeichen weist das Modul ab (K_OHNE_KENNZEICHEN). Wie
+ *  wi_sicherung_alt_erkennen() in WOLF-ISM-NG 3.1.22. */
+if (!function_exists('ko_sicherung_alt_erkennen')) {
+    function ko_sicherung_alt_erkennen($d)
+    {
+        return (is_array($d) && isset($d['_aus_textsicherung']) && $d['_aus_textsicherung'] === KO_TEXT_KOPF) ? $d : null;
     }
 }
 

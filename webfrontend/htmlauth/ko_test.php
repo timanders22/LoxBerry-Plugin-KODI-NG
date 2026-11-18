@@ -304,21 +304,26 @@ function ko_ansage_vergleichsform(array $c)
 
 function ko_sicherungsprobe()
 {
-    $text = ko_sicherung_text();
-    list($erg, $mangel) = ko_sicherung_einlesen($text);
-    if ($erg === null) {
-        /* Die Eintraege sind in ko_sicherung_einlesen() schon maskiert - ein
-         * zweites ko_e() machte aus "box&haus" auf dem Bildschirm
-         * "box&amp;haus" (bis 1.2.6). index.php gibt dieselbe Liste
-         * ebenfalls ohne zweite Maskierung aus. */
+    /* 1.2.29: die eigene Sicherung (JSON, ko_sicherung_json()) durch DASSELBE Modul gelesen wie beim Zurueckspielen
+     * (sicherung_lesen(), schreibt nichts), gegen die geltende Konfiguration als Ziel. Bis 1.2.28 Text und
+     * ko_sicherung_einlesen(). */
+    $text = ko_sicherung_json();
+    $r = $text === false ? null : sicherung_lesen(ko_sicherung_beschreibung(), $text, ko_sicherung_jetzt());
+    if (!is_array($r) || !$r['ok']) {
+        /* Die Saetze des Moduls sind schon maskiert (Namen ueber ko_e()) - ein zweites ko_e() machte aus
+         * "box&haus" auf dem Bildschirm "box&amp;haus" (bis 1.2.6). */
+        $mangel = array();
+        foreach (is_array($r) ? $r['beanstandet'] : array() as $x) {
+            $mangel[] = $x['text'] !== '' ? $x['text'] : ko_e($x['name']);
+        }
         return array(0, sprintf(ko_t('TEST.A_SICH_ABGELEHNT'),
-            implode(' | ', array_slice($mangel, 0, 3))));
+            implode(' | ', array_slice($mangel ? $mangel : array('?'), 0, 3))));
     }
     $cfg = ko_config();
     $ab = array();
     foreach (ko_vorgaben() as $k => $v) {
         $a = isset($cfg[$k]) ? (string) $cfg[$k] : (string) $v;
-        $b = isset($erg['cfg'][$k]) ? (string) $erg['cfg'][$k] : '';
+        $b = (isset($r['neu'][$k]) && is_string($r['neu'][$k])) ? $r['neu'][$k] : '';
         /* 1.2.28: die Sprachansagen nach Inhalt vergleichen, nicht als Zeichenkette. Seit 1.2.24 traegt die
          * Sicherung den Block ohne Sprechtoken und Vermerk, und das Zurueckspielen setzt die geltenden wieder ein
          * (ko_ansage_sicherung_vor()); die base64-Zeichenkette kam deshalb auf jeder Anlage anders zurueck, und

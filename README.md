@@ -1,12 +1,31 @@
 # LoxBerry-Plugin-Kodi NG
 
-Version 1.2.28 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
+Version 1.2.29 · LoxBerry ab 3.0 · PHP 7.4 und 8.x
 
 Installiert Kodi direkt auf dem LoxBerry (Raspberry Pi) und verbindet es mit
 Loxone. Zustand und Ereignisse gehen per **MQTT** über das LoxBerry MQTT
 Gateway an den Miniserver und auf Wunsch zusätzlich per **UDP**; gesteuert wird
 Kodi über JSON-RPC. Die Importdateien für Loxone Config erzeugt das Plugin
 selbst.
+
+## Neu in 1.2.29
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen über das gemeinsame Sicherungsmodul 1.2.11:** Beide Knöpfe im Reiter Einstellungen verhalten sich jetzt wie in den übrigen Plugins dieser Reihe.
+  - Die Sicherung ist jetzt eine JSON-Datei (`kodi_ng_einstellungen.json`) mit einem lesbaren Kopf: Kennzeichen `LoxBerry-Plugin-KODI-NG`, Fassung, Zeitpunkt und Hinweis. Inhalt wie bisher: alle Einstellungen samt Benutzer und Passwort für Kodi, die Sprachansagen ohne Sprechtoken, der Autostart, die sieben Felder im Kodi-Addon und, falls hinterlegt, die Codec-Lizenzen mit ihrer Seriennummer. Was bisher als Kommentar in der Datei stand (ein gespeicherter Wert, der nicht mehr zulässig ist, ein nicht feststellbarer Autostart, nicht lesbare Addon-Einstellungen), nennt jetzt der Kopf `_warnung` – nur mit Namen, nie mit Werten.
+  - Ältere Textsicherungen der Fassungen 1.2.3 bis 1.2.28 werden weiter angenommen: Das Plugin erkennt sie an ihrer ersten Zeile „# Kodi NG - Sicherung der Einstellungen“ und wandelt sie vor dem Zurückspielen in die neue Form um; die Meldung sagt es. Eine andere Textdatei wird als „keine lesbare Sicherung“ abgewiesen. Die umgewandelte Form ist dieselbe wie in WOLF ISM NG und Smartmeter classic: Sie trägt kein Kennzeichen, sondern den Kopf `_aus_textsicherung` mit der ersten Zeile der Textsicherung, und was sich nicht lesen ließ, steht mit Namen und Grund im Kopf `_text_mangel`.
+  - Dass eine Textsicherung umgewandelt wurde, sagt nach dem Zurückspielen ein Satz des gemeinsamen Sicherungsmoduls, in Kodi NG, Smartmeter classic und WOLF ISM NG wortgleich. Was sich darin nicht lesen ließ, tragen alle drei mit denselben Kennungen in `_text_mangel` ein (`ZEILE`, `DOPPELT`, `KOPF`, `WERT`, `ABSCHNITT`), und das Modul weist die Datei wie bisher ab, mit denselben Sätzen und mit dem Namen der Stelle, nie mit einem Wert.
+  - Trägt die Datei in den Sprachansagen ein Sprechtoken, sagt die Meldung jetzt genau das und nennt das Feld (etwa `tts.alexa_token`), nie seinen Wert. Bisher hieß es nur „Die Sprachansagen ließen sich nicht speichern“. Die Datei wird wie bisher abgewiesen, und das geltende Sprechtoken bleibt.
+  - „Zurückspielen“ wirkt nur, wenn der Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“ unmittelbar vor dem Knopf gesetzt ist; ohne ihn wird die Datei nicht gelesen und nichts geändert. Der Haken für die Codec-Lizenzen bleibt, wie er war.
+  - Eine Einstellung in der Datei, die diese Fassung nicht kennt, wird verworfen und mit ihrem Namen genannt; die übrigen werden trotzdem zurückgespielt. Bis 1.2.28 wurde die ganze Datei abgewiesen.
+  - Ein leerer Wert in der Datei überschreibt keinen gespeicherten; der bisherige Wert bleibt und wird genannt. Das gilt auch für das Passwort und für die Felder im Kodi-Addon: Bisher löschte ein leeres Passwort in der Sicherung das gespeicherte, und ein leeres Addon-Feld wurde ins Addon geschrieben.
+  - Fehlt eine Einstellung in der Datei, behält sie wie bisher ihren Wert und wird jetzt genannt.
+  - Wie bisher ändert eine Datei mit einem ungültigen Wert, einem doppelten Schlüssel, einer unlesbaren Zeile oder einem Sprechtoken gar nichts, und alle Beanstandungen werden genannt – jetzt mit dem Namen der Einstellung, nicht mehr mit ihrem Wert.
+  - Einträge der geltenden Konfiguration, die diese Fassung nicht kennt (etwa aus einer Bearbeitung von Hand), fallen beim Zurückspielen weg und werden mit ihrem Namen genannt. Bisher blieben sie stehen.
+  - Die Datei darf bis 256 KB groß sein (bisher 64 kB). Eine Datei, die ein Editor mit einer unsichtbaren Markierung am Anfang (UTF-8-BOM) gespeichert hat, wird gelesen wie ohne sie.
+  - Nach dem Zurückspielen zieht das Plugin wie bisher Autostart, Fernsteuerung aus dem Heimnetz, Addon-Felder und Lizenzen nach und sagt, was dabei geschah.
+- **Knopf „Dokumentation“:** `plugin.cfg` nennt jetzt `WEBSITE=` mit diesem Repository; LoxBerry übernimmt die Adresse bei der Installation und zeigt sie in der Plugin-Verwaltung als Knopf.
+- Die Zweitschrift `<ordner>.backup.json` neben dem Konfigurationsordner wird wie bisher bei jedem Speichern nachgezogen.
+- Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4: mit dem Prüfstand, der über einen Webserver die echten Knöpfe drückt, und mit den Textsicherungen aller 26 Fassungen 1.2.3 bis 1.2.28, erzeugt über deren eigenen Knopf und über den Knopf dieser Fassung zurückgespielt. Autostart, Addon-Felder und Lizenzen kommen nur über den Helfer, den es auf dem Arbeitsrechner nicht gibt; gemessen ist dort nur, dass sie gelesen, geprüft und an den Helfer weitergegeben werden. Am Gerät nicht gemessen.
 
 ## Neu in 1.2.28
 

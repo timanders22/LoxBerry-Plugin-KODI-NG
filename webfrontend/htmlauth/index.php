@@ -186,6 +186,139 @@ function ko_netz_setzen($soll)
         : (isset($j['status']) ? (string) $j['status'] : '?');
 }
 
+/**
+ * 1.2.29: Rueckruf 'nachziehen' des Sicherungsmoduls - nach dem Speichern von kodi.json, wie bis 1.2.28 im
+ * Rueckspielzweig: Abodatei, Autostart, Statussender, Fernsteuerung aus dem Heimnetz, Addon-Felder und Lizenzen.
+ * $vorher ist die geltende Konfiguration vor dem Zurueckspielen, $r das Ergebnis des Moduls (die Teile in
+ * $r['teile'], gelesen und geprueft vom Modul). Rueckgabe: die Saetze, die sagen, was geschah.
+ */
+function ko_sicherung_nachziehen($vorher, $r, $lizenz_auch)
+{
+    $m = array();
+    // KODI-c1: das Praefix kann gewechselt haben.
+    list($abo_stand, , $abo_datei) = ko_abodatei_nachfuehren();
+    if ($abo_stand === 0) {
+        $m[] = sprintf(ko_t('MQTT.M_ABODATEI_FEHL'), ko_e($abo_datei));
+    }
+    $teile = (is_array($r) && isset($r['teile']) && is_array($r['teile'])) ? $r['teile'] : array();
+
+    /* Autostart nachziehen - und die Antwort lesen. */
+    if (isset($teile['autostart'])) {
+        $grund = ko_helfer_setzen('kodiautostart', (int) $teile['autostart']);
+        $m[] = $grund === ''
+            ? sprintf(ko_t('SICH.U_AUTOSTART'), $teile['autostart'] === '1' ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'))
+            : sprintf(ko_t('SICH.U_AUTOSTART_FEHL'), ko_e($grund));
+    }
+    /* Und sagen, was mit dem Statussender geschah - er liest die Konfiguration beim naechsten Cron-Durchgang. */
+    $cfg = ko_config();
+    $m[] = sprintf(ko_t('SICH.U_SENDER'), (string) $cfg['sender_ein'] === '1' ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'));
+    /* 1.2.22 (Entwurf 3.6): hat die Sicherung die Fernsteuerung aus dem Heimnetz anders gestellt, folgt die
+     * advancedsettings.xml ueber den Helfer (wirkt nach Kodi-Neustart). */
+    $netz_vorher = (is_array($vorher) && isset($vorher['fernsteuerung_netz_ein'])) ? (string) $vorher['fernsteuerung_netz_ein'] : '';
+    if ((string) $cfg['fernsteuerung_netz_ein'] !== $netz_vorher) {
+        $grund = ko_netz_setzen($cfg['fernsteuerung_netz_ein']);
+        $m[] = $grund === ''
+            ? ko_t((string) $cfg['fernsteuerung_netz_ein'] === '1' ? 'LOX.M_NETZ_AUF' : 'LOX.M_NETZ_ZU')
+            : sprintf(ko_t('LOX.M_NETZ_FEHL'), ko_e($grund));
+    }
+
+    /* Die Addon-Felder. Sie lassen sich nur schreiben, wenn Kodi steht - sonst schreibt Kodi beim Beenden seine
+     * eigene Datei zurueck und macht die Aenderung ungeschehen. Statt still zu scheitern, wird gesagt was ist. */
+    if (!empty($teile['addon']) && is_array($teile['addon'])) {
+        /* Die Felder, die DEM PLUGIN gehoeren (Adresse des LoxBerry, UDP-Eingang, Schalter, Thema), kommen NICHT aus
+         * der Sicherung, sondern aus dem Soll DIESES Geraets (Befund U4, 29.09.2026): beim Umzug stand sonst die IP
+         * des alten LoxBerry im Addon, und die Meldung sagte "uebernommen". Was hier nicht zu ermitteln ist, wird
+         * nicht geschrieben (wie beim Knopf im Reiter MQTT). Danach wird Ist gegen Soll gehalten. */
+        $asoll = ko_addon_soll();
+        $schreib = array();
+        $vom_geraet = array();
+        $nicht = array();
+        foreach ($teile['addon'] as $k => $v) {
+            if (array_key_exists($k, $asoll)) {
+                if ((string) $asoll[$k] === '') { $nicht[] = $k; continue; }
+                $schreib[$k] = (string) $asoll[$k];
+                $vom_geraet[] = $k;
+            } else {
+                $schreib[$k] = (string) $v;
+            }
+        }
+        $st = ko_status(true);
+        if (!$schreib) {
+            // Nichts, was sich hier schreiben liesse - die Zeile unten nennt die Felder.
+        } elseif (!empty($st['kodistarted'])) {
+            $m[] = sprintf(ko_t('SICH.U_ADDON_LAEUFT'), count($schreib));
+        } else {
+            $args = array('action=addonwrite');
+            foreach ($schreib as $k => $v) {
+                $args[] = escapeshellarg('a_' . $k . '=' . rawurlencode($v));
+            }
+            // ko_helper_json schneidet einen Kopfblock ab; bis 1.2.6 scheiterte json_decode hier an "Status: 200".
+            $a = ko_helper_json(implode(' ', $args));
+            if (is_array($a) && isset($a['status']) && $a['status'] === 'OK') {
+                $m[] = sprintf(ko_t('SICH.U_ADDON'), count($schreib));
+                if ($vom_geraet) {
+                    $m[] = sprintf(ko_t('SICH.U_ADDON_SOLL'), ko_e(implode(', ', $vom_geraet)));
+                }
+                // Soll: was geschrieben wurde, dazu jedes Feld des Plugins, das dieses Geraet kennt.
+                $pruef = $schreib;
+                foreach ($asoll as $k => $v) {
+                    if ((string) $v !== '' && !array_key_exists($k, $pruef)) { $pruef[$k] = (string) $v; }
+                }
+                $ist = ko_addon_lesen(true);
+                if (!is_array($ist)) {
+                    $m[] = ko_t('SICH.U_ADDON_UNGEPRUEFT');
+                } else {
+                    $ab = array();
+                    foreach ($pruef as $k => $v) {
+                        if (!isset($ist[$k]) || (string) $ist[$k] !== (string) $v) { $ab[] = $k; }
+                    }
+                    if ($ab) {
+                        $m[] = sprintf(ko_t('SICH.U_ADDON_ABWEICHUNG'), ko_e(implode(', ', $ab)));
+                    }
+                }
+            } else {
+                $m[] = sprintf(ko_t('SICH.U_ADDON_FEHL'),
+                    ko_e(is_array($a) && isset($a['reason']) ? $a['reason'] : '?'));
+            }
+        }
+        if ($nicht) {
+            $m[] = sprintf(ko_t('SICH.U_ADDON_NICHT_ERMITTELBAR'), ko_e(implode(', ', $nicht)));
+        }
+    }
+
+    /* Die Codec-Lizenzen: nur auf ausdruecklichen Wunsch UND nur bei uebereinstimmender Seriennummer. Sie gelten fuer
+     * genau einen Pi; auf einem zweiten LoxBerry waeren sie wertlos, und eine falsche Zeile in der config.txt merkt
+     * niemand, bis der Rechner nicht mehr startet. */
+    if (!empty($teile['lizenz']) && is_array($teile['lizenz'])) {
+        $l = $teile['lizenz'];
+        if (!$lizenz_auch) {
+            $m[] = sprintf(ko_t('SICH.U_LIZENZ_UEBERGANGEN'), count(array_diff_key($l, array('serie' => 1))));
+        } else {
+            $st = ko_status(true);
+            $hier = isset($st['piserial']) ? trim((string) $st['piserial']) : '';
+            $dort = isset($l['serie']) ? (string) $l['serie'] : '';
+            if ($dort === '' || $hier === '' || $hier === 'Not found') {
+                $m[] = ko_t('SICH.U_LIZENZ_UNBEKANNT');
+            } elseif ($hier !== $dort) {
+                $m[] = sprintf(ko_t('SICH.U_LIZENZ_FREMD'), ko_e($dort), ko_e($hier));
+            } else {
+                $gesetzt = 0;
+                foreach (array('mpeg2' => 'licmpeg2', 'vc1' => 'licvc1') as $q => $key) {
+                    if (!isset($l[$q])) { continue; }
+                    $grund = ko_helfer_setzen($key, $l[$q]);
+                    // Gezaehlt wird, was GELANG, nicht was versucht wurde.
+                    if ($grund === '') { $gesetzt++; }
+                    else { $m[] = sprintf(ko_t('SICH.U_LIZENZ_FEHL'), ko_e($key), ko_e($grund)); }
+                }
+                // Dieselbe Klasse wie im Speichern-Zweig: eben geschaltet, also den Zustand frisch holen.
+                ko_status(true);
+                $m[] = sprintf(ko_t('SICH.U_LIZENZ'), $gesetzt);
+            }
+        }
+    }
+    return $m;
+}
+
 $ko_saved = false;
 $ko_err = '';
 $ko_note = '';
@@ -280,205 +413,65 @@ if (ko_ist_post() && isset($_POST['ansage_speichern'])) {
     $ko_tab = 'tab-settings';
 }
 if (ko_ist_post() && isset($_POST['sichern'])) {
-    // X-3: Kopfzeile _warnung mit den Namen, falls noetig (ko_warnkopf_setzen).
-    $ko_txt = ko_warnkopf_setzen(ko_sicherung_text());
-    while (ob_get_level() > 0) { @ob_end_clean(); }   // K18 (1.2.22)
-    header('Content-Type: application/x-download');
-    header('Content-Disposition: attachment; filename="kodi_ng_einstellungen.txt"');
-    header('Content-Length: ' . strlen($ko_txt));
-    echo $ko_txt;
-    exit;
+    /* 1.2.29: ueber das gemeinsame Sicherungsmodul - eine JSON-Datei mit Kopf (_hinweis, _plugin, _fassung, _stand,
+     * wenn noetig _warnung mit Namen, nie Werten) und dem Inhalt wie bis 1.2.28 (ko_sicherung_json()). */
+    $ko_txt = ko_sicherung_json();
+    if ($ko_txt === false) {
+        $ko_err = ko_t('SICH.M_NICHT_GEBAUT');
+    } else {
+        while (ob_get_level() > 0) { @ob_end_clean(); }   // K18 (1.2.22)
+        header('Content-Type: application/x-download');
+        header('Content-Disposition: attachment; filename="kodi_ng_einstellungen.json"');
+        header('Content-Length: ' . strlen($ko_txt));
+        echo $ko_txt;
+        exit;
+    }
 }
 
 if (ko_ist_post()) {
 
-    /* ============ Einstellungen zurueckspielen ============ */
+    /* ============ Einstellungen zurueckspielen ============
+     *
+     * 1.2.29: ueber das gemeinsame Sicherungsmodul, in jeder Linie gleich. Den Eingang prueft sicherung_eingang():
+     * zuerst der Haken zurueck_ok (ohne ihn wird nichts gelesen und nichts geaendert), dann is_uploaded_file() und die
+     * Groessengrenze des Moduls (bis 1.2.28 eigene Pruefung mit 64 kB). Eine Textsicherung bis 1.2.28 wandelt
+     * ko_sicherung_aus_text() vorher in die JSON-Form dieser Fassung um (Entscheidung des Hausherrn 18.11.2026); jede
+     * andere Datei geht unveraendert an das Modul; dass umgewandelt wurde, sagt seit Modul 1.2.11 das Modul selbst
+     * (K_AUS_TEXT, Regel 21; bis dahin der eigene Satz SICH.TEXT_UMGEWANDELT). Lesen, Pruefen, Speichern, Zweitschrift
+     * messen und die Protokollzeile macht sicherung_zurueckspielen(): Unbekanntes wird verworfen und mit Namen genannt, ein leerer
+     * Wert laesst den bisherigen stehen, eine halb gueltige Datei aendert GAR NICHTS (alle Beanstandungen gesammelt).
+     * Gespeichert wird genau der Stand, den das Modul liefert (ko_config_schreiben() zieht die Zweitschrift mit).
+     * Danach zieht ko_sicherung_nachziehen() Abodatei, Autostart, Fernsteuerung, Addon-Felder und Lizenzen nach wie
+     * bis 1.2.28 und sagt, was geschah. */
     if (isset($_POST['laden'])) {
         $ko_tab = 'tab-settings';
-        /* is_string VOR is_uploaded_file.
-         *
-         * Heisst das Formularfeld sicherung[] statt sicherung, baut PHP
-         * tmp_name als FELD. isset() ist dann wahr, und is_uploaded_file()
-         * wirft unter PHP 8.4 einen TypeError - den das @-Zeichen NICHT
-         * auffaengt, weil er kein Fehler alter Art ist. Mit display_errors=0
-         * bekaeme der Anwender eine leere Seite. Gemessen: 7.4 liefert brav
-         * false, 8.4 bricht ab. */
-        if (!isset($_FILES['sicherung']) || !is_array($_FILES['sicherung'])
-            || !isset($_FILES['sicherung']['tmp_name'])
-            || !is_string($_FILES['sicherung']['tmp_name'])
-            || !isset($_FILES['sicherung']['size'])
-            || !is_scalar($_FILES['sicherung']['size'])
-            || !@is_uploaded_file($_FILES['sicherung']['tmp_name'])) {
-            $ko_err = ko_t('SICH.M_KEINE_DATEI');
-        } elseif ((int) $_FILES['sicherung']['size'] > 65536) {
-            $ko_err = ko_t('SICH.M_ZU_GROSS');
+        $ko_sb = ko_sicherung_beschreibung();
+        list($ko_sroh, $ko_sab) = sicherung_eingang($ko_sb, $_POST, $_FILES, 'sicherung');
+        if ($ko_sab !== null) {
+            $ko_sm = sicherung_meldungen($ko_sb, $ko_sab);
+            $ko_err = implode(' ', $ko_sm['fehler']);
         } else {
-            $ko_roh = ko_lesen($_FILES['sicherung']['tmp_name']);
-            list($ko_neu, $ko_mangel) = ko_sicherung_einlesen($ko_roh);
-            if ($ko_neu === null) {
-                // Eine halb gueltige Datei ueberschreibt NICHTS.
-                $ko_beanstandungen = $ko_mangel;
-                $ko_err = ko_t('SICH.M_ABGELEHNT');
-            } else {
-                $ko_meldungen = array();
-                $ko_cfg = ko_config();
-                $ko_netz_vorher = (string) $ko_cfg['fernsteuerung_netz_ein'];
-                foreach ($ko_neu['cfg'] as $ko_k => $ko_v) { $ko_cfg[$ko_k] = $ko_v; }
-                if (!ko_config_schreiben($ko_cfg)) {
-                    $ko_err = sprintf(ko_t('MELDUNG.SCHREIBFEHLER'), ko_e(ko_paths()['config']));
-                } else {
-                    $ko_saved = true;
-                    ko_config(true);
-                    $ko_meldungen[] = sprintf(ko_t('SICH.U_KONFIG'), count($ko_neu['cfg']));
-                    // KODI-c1: das Praefix kann gewechselt haben.
-                    list($ko_abo_stand, , $ko_abo_datei) = ko_abodatei_nachfuehren();
-                    if ($ko_abo_stand === 0) {
-                        $ko_meldungen[] = sprintf(ko_t('MQTT.M_ABODATEI_FEHL'), ko_e($ko_abo_datei));
-                    }
-
-                    /* Autostart nachziehen - und die Antwort lesen. */
-                    if ($ko_neu['autostart'] !== null) {
-                        $ko_grund = ko_helfer_setzen('kodiautostart', (int) $ko_neu['autostart']);
-                        $ko_meldungen[] = $ko_grund === ''
-                            ? sprintf(ko_t('SICH.U_AUTOSTART'),
-                                $ko_neu['autostart'] ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'))
-                            : sprintf(ko_t('SICH.U_AUTOSTART_FEHL'), ko_e($ko_grund));
-                    }
-                    /* Und sagen, was mit dem Statussender geschah - er liest
-                     * die Konfiguration beim naechsten Cron-Durchgang. */
-                    $ko_meldungen[] = sprintf(ko_t('SICH.U_SENDER'),
-                        (string) ko_config()['sender_ein'] === '1' ? ko_t('ALLG.EIN') : ko_t('ALLG.AUS'));
-                    /* 1.2.22 (Entwurf 3.6): hat die Sicherung die Fernsteuerung aus dem Heimnetz anders
-                     * gestellt, folgt die advancedsettings.xml ueber den Helfer (wirkt nach Kodi-Neustart). */
-                    if ((string) ko_config()['fernsteuerung_netz_ein'] !== $ko_netz_vorher) {
-                        $ko_grund = ko_netz_setzen(ko_config()['fernsteuerung_netz_ein']);
-                        $ko_meldungen[] = $ko_grund === ''
-                            ? ko_t((string) ko_config()['fernsteuerung_netz_ein'] === '1' ? 'LOX.M_NETZ_AUF' : 'LOX.M_NETZ_ZU')
-                            : sprintf(ko_t('LOX.M_NETZ_FEHL'), ko_e($ko_grund));
-                    }
-
-                    /* Die Addon-Felder. Sie lassen sich nur schreiben, wenn
-                     * Kodi steht - sonst schreibt Kodi beim Beenden seine
-                     * eigene Datei zurueck und macht die Aenderung
-                     * ungeschehen. Statt still zu scheitern, wird gesagt was
-                     * ist. */
-                    if ($ko_neu['addon']) {
-                        /* Die Felder, die DEM PLUGIN gehoeren (Adresse des
-                         * LoxBerry, UDP-Eingang, Schalter, Thema), kommen NICHT
-                         * aus der Sicherung, sondern aus dem Soll DIESES Geraets
-                         * (Befund U4, 29.09.2026): beim Umzug stand sonst die IP
-                         * des alten LoxBerry im Addon, und die Meldung sagte
-                         * "uebernommen". Was hier nicht zu ermitteln ist, wird
-                         * nicht geschrieben (wie beim Knopf im Reiter MQTT).
-                         * Danach wird Ist gegen Soll gehalten. */
-                        $ko_asoll = ko_addon_soll();
-                        $ko_schreib = array();
-                        $ko_vom_geraet = array();
-                        $ko_nicht = array();
-                        foreach ($ko_neu['addon'] as $ko_k => $ko_v) {
-                            if (array_key_exists($ko_k, $ko_asoll)) {
-                                if ((string) $ko_asoll[$ko_k] === '') { $ko_nicht[] = $ko_k; continue; }
-                                $ko_schreib[$ko_k] = (string) $ko_asoll[$ko_k];
-                                $ko_vom_geraet[] = $ko_k;
-                            } else {
-                                $ko_schreib[$ko_k] = $ko_v;
-                            }
-                        }
-                        $ko_st = ko_status(true);
-                        if (!$ko_schreib) {
-                            // Nichts, was sich hier schreiben liesse - die Zeile
-                            // unten nennt die Felder.
-                        } elseif (!empty($ko_st['kodistarted'])) {
-                            $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_LAEUFT'), count($ko_schreib));
-                        } else {
-                            $ko_args = array('action=addonwrite');
-                            foreach ($ko_schreib as $ko_k => $ko_v) {
-                                $ko_args[] = escapeshellarg('a_' . $ko_k . '=' . rawurlencode($ko_v));
-                            }
-                            // ko_helper_json schneidet einen Kopfblock ab; bis
-                            // 1.2.6 scheiterte json_decode hier an "Status: 200".
-                            $ko_a = ko_helper_json(implode(' ', $ko_args));
-                            if (is_array($ko_a) && isset($ko_a['status']) && $ko_a['status'] === 'OK') {
-                                $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON'), count($ko_schreib));
-                                if ($ko_vom_geraet) {
-                                    $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_SOLL'), ko_e(implode(', ', $ko_vom_geraet)));
-                                }
-                                // Soll: was geschrieben wurde, dazu jedes Feld des
-                                // Plugins, das dieses Geraet kennt.
-                                $ko_pruef = $ko_schreib;
-                                foreach ($ko_asoll as $ko_k => $ko_v) {
-                                    if ((string) $ko_v !== '' && !array_key_exists($ko_k, $ko_pruef)) {
-                                        $ko_pruef[$ko_k] = (string) $ko_v;
-                                    }
-                                }
-                                $ko_ist = ko_addon_lesen(true);
-                                if (!is_array($ko_ist)) {
-                                    $ko_meldungen[] = ko_t('SICH.U_ADDON_UNGEPRUEFT');
-                                } else {
-                                    $ko_ab = array();
-                                    foreach ($ko_pruef as $ko_k => $ko_v) {
-                                        if (!isset($ko_ist[$ko_k]) || (string) $ko_ist[$ko_k] !== (string) $ko_v) {
-                                            $ko_ab[] = $ko_k;
-                                        }
-                                    }
-                                    if ($ko_ab) {
-                                        $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_ABWEICHUNG'), ko_e(implode(', ', $ko_ab)));
-                                    }
-                                }
-                            } else {
-                                $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_FEHL'),
-                                    ko_e(is_array($ko_a) && isset($ko_a['reason']) ? $ko_a['reason'] : '?'));
-                            }
-                        }
-                        if ($ko_nicht) {
-                            $ko_meldungen[] = sprintf(ko_t('SICH.U_ADDON_NICHT_ERMITTELBAR'), ko_e(implode(', ', $ko_nicht)));
-                        }
-                    }
-
-                    /* Die Codec-Lizenzen: nur auf ausdruecklichen Wunsch UND
-                     * nur bei uebereinstimmender Seriennummer. Sie gelten fuer
-                     * genau einen Pi; auf einem zweiten LoxBerry waeren sie
-                     * wertlos, und eine falsche Zeile in der config.txt merkt
-                     * niemand, bis der Rechner nicht mehr startet. */
-                    if ($ko_neu['lizenz']) {
-                        if (empty($_POST['lizenz_auch'])) {
-                            $ko_meldungen[] = sprintf(ko_t('SICH.U_LIZENZ_UEBERGANGEN'),
-                                count(array_diff_key($ko_neu['lizenz'], array('lizenz_serie' => 1))));
-                        } else {
-                            $ko_st = ko_status(true);
-                            $ko_hier = isset($ko_st['piserial']) ? trim((string) $ko_st['piserial']) : '';
-                            $ko_dort = isset($ko_neu['lizenz']['lizenz_serie'])
-                                ? $ko_neu['lizenz']['lizenz_serie'] : '';
-                            if ($ko_dort === '' || $ko_hier === '' || $ko_hier === 'Not found') {
-                                $ko_meldungen[] = ko_t('SICH.U_LIZENZ_UNBEKANNT');
-                            } elseif ($ko_hier !== $ko_dort) {
-                                $ko_meldungen[] = sprintf(ko_t('SICH.U_LIZENZ_FREMD'),
-                                    ko_e($ko_dort), ko_e($ko_hier));
-                            } else {
-                                $ko_gesetzt = 0;
-                                foreach (array('lizenz_mpeg2' => 'licmpeg2', 'lizenz_vc1' => 'licvc1')
-                                         as $ko_q => $ko_key) {
-                                    if (!isset($ko_neu['lizenz'][$ko_q])) { continue; }
-                                    $ko_grund = ko_helfer_setzen($ko_key, $ko_neu['lizenz'][$ko_q]);
-                                    // Gezaehlt wird, was GELANG, nicht was versucht wurde.
-                                    if ($ko_grund === '') { $ko_gesetzt++; }
-                                    else {
-                                        $ko_meldungen[] = sprintf(ko_t('SICH.U_LIZENZ_FEHL'),
-                                            ko_e($ko_key), ko_e($ko_grund));
-                                    }
-                                }
-                                // Dieselbe Klasse wie im Speichern-Zweig: eben
-                                // geschaltet, also den Zustand frisch holen.
-                                ko_status(true);
-                                $ko_meldungen[] = sprintf(ko_t('SICH.U_LIZENZ'), $ko_gesetzt);
-                            }
-                        }
-                    }
-
-                    ko_log('Sicherung zurueckgespielt: ' . implode(' ', $ko_meldungen));
-                    $ko_note = ko_t('SICH.M_UEBERNOMMEN') . ' ' . implode(' ', $ko_meldungen);
-                }
+            $ko_sroh = ko_sicherung_aus_text($ko_sroh);
+            $ko_lizenz_auch = !empty($_POST['lizenz_auch']);
+            $ko_sb['speichern'] = function ($neu) {
+                $ok = ko_config_schreiben($neu);
+                ko_config(true);
+                return $ok;
+            };
+            $ko_sp = ko_paths();
+            if ($ko_sp['home'] !== '') {
+                $ko_sb['zweitschrift'] = function () use ($ko_sp) { return array($ko_sp['config'], $ko_sp['zweit']); };
             }
+            $ko_sb['nachziehen'] = function ($neu, $vorher, $r) use ($ko_lizenz_auch) {
+                return ko_sicherung_nachziehen($vorher, $r, $ko_lizenz_auch);
+            };
+            $ko_sb['log'] = function ($z) { ko_log($z); };
+            $ko_sr = sicherung_zurueckspielen($ko_sb, $ko_sroh);
+            $ko_sm = sicherung_meldungen($ko_sb, $ko_sr);
+            if ($ko_sm['fehler']) { $ko_err = implode(' ', $ko_sm['fehler']); }
+            $ko_h = $ko_sm['hinweise'];
+            if ($ko_h) { $ko_note = implode(' ', $ko_h); }
+            if ($ko_sr['gespeichert']) { $ko_saved = true; }
         }
     }
 
@@ -1372,7 +1365,7 @@ if ($ko_altwerte) {
  * Zurueckspielen abgewiesen (etwa wegen eines Addon-Felds des Plugins),
  * steht es hier - mit den Namen, nie den Werten. Dieselbe Pruefung wie beim
  * Zurueckspielen (ko_rueckspiel_befund). */
-/* K17 (1.2.22): ko_rueckspiel_befund() liest ueber ko_sicherung_text() die Addon-Einstellungen (sudo, addonread) -
+/* K17 (1.2.22): ko_rueckspiel_befund() liest ueber ko_sicherung_json() die Addon-Einstellungen (sudo, addonread) -
  * nur, wenn dieser Reiter serverseitig offen ist; er ist der Standardreiter. */
 $ko_rsb = $ko_tab === 'tab-settings' ? ko_rueckspiel_befund() : array();
 if ($ko_rsb) { ?>
@@ -1397,7 +1390,7 @@ if ($ko_rsb) { ?>
     <!-- accept ist ein Hinweis fuer den Dateidialog und KEINE Pruefung - der
          Browser haelt sich nicht immer daran, und ein Upload kommt ohnehin
          auch ohne Browser. Geprueft wird serverseitig. -->
-    <input data-role="none" type="file" id="ko_datei" name="sicherung" accept=".txt,text/plain">
+    <input data-role="none" type="file" id="ko_datei" name="sicherung" accept=".json,application/json,.txt,text/plain">
     <div class="sm-hilfe"><?= ko_t('SICH.H_DATEI') ?></div>
   </div>
   <div class="sm-feld">
@@ -1405,6 +1398,7 @@ if ($ko_rsb) { ?>
       <?= ko_e(ko_t('SICH.L_LIZENZ')) ?></label>
     <div class="sm-hilfe"><?= ko_t('SICH.H_LIZENZ') ?></div>
   </div>
+  <?= sicherung_haken_zeile(ko_sicherung_beschreibung()) ?>
   <div class="sm-knopfreihe">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="laden" value="1"><?= ko_e(ko_t('SICH.K_LADEN')) ?></button>
   </div>
