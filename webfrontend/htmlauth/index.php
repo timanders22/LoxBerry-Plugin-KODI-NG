@@ -1008,7 +1008,8 @@ $ko_p    = ko_paths();
 $ko_frame = class_exists('LBWeb', false);
 /* K18 (1.2.22): der Hilfelink zeigt auf die Plugin-Seite im LoxBerry-Wiki (am 01.10.2026 angelegt, am 23.10.
  * geoeffnet: "Kodi NG"), nicht mehr auf die Startseite. */
-if ($ko_frame) { LBWeb::lbheader(ko_t('ALLG.TITEL'), 'https://wiki.loxberry.de/plugins/kodi_ng/start', 'help.html'); }
+require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+if ($ko_frame) { LBWeb::lbheader(plugin_kopftitel(ko_t('ALLG.TITEL'), __DIR__), 'https://wiki.loxberry.de/plugins/kodi_ng/start', 'help.html'); }
 /* NICHT hier maskieren: beide Verwendungsstellen schicken den Wert ohnehin
  * durch ko_e(). Doppelt maskiert stand ohne Host-Kopfzeile woertlich
  * "tcp://&lt;loxberry-ip&gt;:9090" auf dem Bildschirm - gemessen. */
