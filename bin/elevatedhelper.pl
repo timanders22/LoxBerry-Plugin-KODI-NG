@@ -10,7 +10,6 @@ use strict;
 
 our $cgi = CGI->new;
 $cgi->import_names('R');
-my  $version = "1.2.0";
 
 # ------------------------------------------------------------------
 # KOPFZEILEN NUR UNTER EINEM WEBSERVER.
