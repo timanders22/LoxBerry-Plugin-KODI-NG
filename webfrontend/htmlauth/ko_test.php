@@ -778,6 +778,10 @@ function ko_pruefungen(array $reiter, $indexdatei)
     list($s, $t) = ko_abosatzprobe();
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_ABOSATZ'), $t);
 
+    // 1.2.34: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $ko_hb = ko_pruef_praefix_haus(ko_config());
+    $z[] = ko_pruefzeile($ko_hb[0], ko_t('HAUSBEREICH.F_TEST'), $ko_hb[1]);
+
     list($s, $t) = ko_reiterprobe($reiter, $indexdatei);
     $z[] = ko_pruefzeile($s, ko_t('TEST.F_REITER'), $t);
 

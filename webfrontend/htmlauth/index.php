@@ -400,6 +400,12 @@ if (ko_ist_post() && isset($_POST['vorlage']) && is_string($_POST['vorlage'])
 }
 
 /* Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+/* 1.2.34: Testmeldung an SignalBot (Knopf unter den Sprachansagen) - wie die Testansage darunter. */
+if (ko_ist_post() && isset($_POST['meld_test'])) {
+    list($ko_at, $ko_ag) = ko_meld_test();
+    if ($ko_at) { $ko_saved = true; } else { $ko_err = $ko_ag; }
+    $ko_tab = 'tab-settings';
+}
 if (ko_ist_post() && isset($_POST['ansage_test'])) {
     list($ko_at, $ko_ag) = ko_ansage_test();
     if ($ko_at) { $ko_saved = true; } else { $ko_err = ko_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $ko_ag; }
@@ -683,6 +689,16 @@ if (ko_ist_post()) {
                 $ko_mangel[] = sprintf(ko_t('BEFEHL.M_PRAEFIX'), ko_e(ko_praefix($ko_cfg)));
                 $ko_falsch[] = 'mqtt_topic';
             }
+        }
+        /* 1.2.34 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        if (!in_array('mqtt_topic', $ko_falsch, true) && isset($_POST['mqtt_topic'])
+            && hb_bereich(ko_praefix($ko_cfg)) !== '' && ko_praefix($ko_cfg) !== $ko_praefix_vorher) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+            // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+            $ko_mangel[] = sprintf(ko_t('HAUSBEREICH.FEHLER'), ko_e(ko_praefix($ko_cfg)),
+                ko_e(hb_bereich(ko_praefix($ko_cfg))));
+            $ko_falsch[] = 'mqtt_topic';
         }
         if ($ko_mangel) {
             $ko_beanstandungen = $ko_mangel;
